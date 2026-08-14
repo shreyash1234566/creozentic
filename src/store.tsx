@@ -15,12 +15,15 @@ import {
 import { getServerState, startServerRun } from "./client/api";
 
 export type Brand = {
+  id?: string;
+  approvalStatus?: string;
   name: string;
   tagline: string;
   tone: string;
   colors: string[];
   fonts: string;
   references: string[];
+  referenceAssetIds?: string[];
   vertical: string;
   language: string;
   category: string;
@@ -52,6 +55,11 @@ export type Brand = {
     defaultFormats?: string[];
   };
   claimsPolicy?: { requireEvidence: boolean; forbiddenTerms: string[] };
+  approvedExamples?: string[];
+  avoidExamples?: string[];
+  website?: string;
+  instagram?: string;
+  sourceFolder?: string;
 };
 
 export type LedgerEntry = {
@@ -81,6 +89,16 @@ export type AuditEvent = {
 
 type Store = {
   backendEnabled: boolean;
+  role:
+    | "OWNER"
+    | "ADMIN"
+    | "STRATEGIST"
+    | "EDITOR"
+    | "REVIEWER"
+    | "CLIENT"
+    | "PUBLISHER"
+    | "BILLING"
+    | "VIEWER";
   brand: Brand;
   setBrand: (b: Brand) => void;
   credits: number;
@@ -121,6 +139,7 @@ type Store = {
     title: string;
     brief: ProductLockBrief;
     idempotencyKey: string;
+    workflowVersionId?: string;
   }) => Promise<{ runId?: string; error?: string }>;
 };
 
@@ -209,7 +228,7 @@ function toLocalOutput(value: unknown, runId: string): OutputAsset {
     id: stringValue(raw.id, uid("output")),
     runId,
     name: stringValue(raw.name, "output.png"),
-    imgId: stringValue(metadata.imgId, "photo-1616693153250-bb03055788eb"),
+    imgId: stringValue(metadata.imgId),
     format: stringValue(raw.format, "Feed"),
     ratio: stringValue(metadata.ratio, stringValue(raw.format, "1:1")),
     width: numberValue(raw.width, 1080),
@@ -219,6 +238,14 @@ function toLocalOutput(value: unknown, runId: string): OutputAsset {
     aiEdited: metadata.aiEdited !== false,
     assetId: stringValue(raw.assetId) || undefined,
     downloadUrl: stringValue(metadata.downloadUrl) || undefined,
+    qualityScores:
+      raw.qualityScores && typeof raw.qualityScores === "object"
+        ? (raw.qualityScores as Record<string, unknown>)
+        : undefined,
+    metadata:
+      raw.metadata && typeof raw.metadata === "object"
+        ? (raw.metadata as Record<string, unknown>)
+        : undefined,
   };
 }
 
@@ -294,6 +321,11 @@ function toLocalReviewTask(value: unknown): ReviewTask | null {
           author: stringValue(item.externalAuthor, stringValue(item.authorId, "Workspace member")),
           text: stringValue(item.text),
           region: stringValue(item.region, "asset"),
+          assetId: stringValue(item.assetId) || undefined,
+          anchor:
+            item.anchor && typeof item.anchor === "object"
+              ? (item.anchor as { x?: number; y?: number; t?: number })
+              : undefined,
           createdAt: new Date(stringValue(item.createdAt)).getTime() || Date.now(),
         };
       })
@@ -306,7 +338,7 @@ function toLocalReviewTask(value: unknown): ReviewTask | null {
     brand: "Workspace brand",
     version: `server run ${runId.slice(-8)}`,
     kind: stringValue(raw.kind, "static") as "static" | "video",
-    images: outputs.map((output) => output.imgId),
+    images: outputs.map((output) => output.downloadUrl ?? output.imgId),
     outputs,
     status: stringValue(raw.status, "PENDING").toLowerCase() as ReviewTask["status"],
     verdicts: objectRecord(raw.verdicts) as Record<string, QualityCheck>,
@@ -350,52 +382,70 @@ const Ctx = createContext<Store | null>(null);
 
 export function StoreProvider({ children }: { children: ReactNode }) {
   const backendEnabled = process.env.NEXT_PUBLIC_BACKEND_ENABLED === "true";
+  const [role, setRole] = useState<Store["role"]>(backendEnabled ? "VIEWER" : "OWNER");
   const [brand, setBrand] = useState<Brand>(() => ({
     ...DEFAULT_BRAND,
-    ...load("brand", {}),
+    ...(backendEnabled ? {} : load("brand", {})),
   }));
-  const [credits, setCredits] = useState<number>(() => load("credits", 1000));
+  const [credits, setCredits] = useState<number>(() => load("credits", backendEnabled ? 0 : 1000));
   const [ledger, setLedger] = useState<LedgerEntry[]>(() =>
-    load("ledger", [
-      {
-        id: "l0",
-        ts: Date.now() - 86400000,
-        label: "Starter plan top-up",
-        credits: 1000,
-        kind: "topup" as const,
-        state: "topup" as const,
-      },
-    ]),
+    load(
+      "ledger",
+      backendEnabled
+        ? []
+        : [
+            {
+              id: "l0",
+              ts: Date.now() - 86400000,
+              label: "Starter plan top-up",
+              credits: 1000,
+              kind: "topup" as const,
+              state: "topup" as const,
+            },
+          ],
+    ),
   );
   const [reservedCredits, setReservedCredits] = useState<number>(() => load("reservedCredits", 0));
-  const [reservations, setReservations] = useState<Reservation[]>(() => load("reservations", []));
-  const [workflowRuns, setWorkflowRuns] = useState<WorkflowRun[]>(() => load("workflowRuns", []));
-  const [reviewTasks, setReviewTasks] = useState<ReviewTask[]>(() => load("reviewTasks", []));
-  const [seats, setSeats] = useState<Seat[]>(() => load("seats", DEFAULT_SEATS));
+  const [reservations, setReservations] = useState<Reservation[]>(() =>
+    backendEnabled ? [] : load("reservations", []),
+  );
+  const [workflowRuns, setWorkflowRuns] = useState<WorkflowRun[]>(() =>
+    backendEnabled ? [] : load("workflowRuns", []),
+  );
+  const [reviewTasks, setReviewTasks] = useState<ReviewTask[]>(() =>
+    backendEnabled ? [] : load("reviewTasks", []),
+  );
+  const [seats, setSeats] = useState<Seat[]>(() =>
+    backendEnabled ? [] : load("seats", DEFAULT_SEATS),
+  );
   const [done, setDone] = useState<Record<string, boolean>>(() =>
-    load("done", {
-      "model-router": true,
-      "workflow-engine": true,
-      "canvas-chat": true,
-    }),
+    backendEnabled
+      ? {}
+      : load("done", {
+          "model-router": true,
+          "workflow-engine": true,
+          "canvas-chat": true,
+        }),
   );
   const [audit, setAudit] = useState<AuditEvent[]>(() =>
-    load("audit", [
-      {
-        id: "a0",
-        ts: Date.now() - 3600000,
-        actor: "Aarav Mehta",
-        action: "approved",
-        target: "Monsoon sofa pack · v2",
-      },
-      {
-        id: "a1",
-        ts: Date.now() - 7200000,
-        actor: "Priya Nair",
-        action: "exported",
-        target: "Kadam sofa · 3 formats",
-      },
-    ]),
+    backendEnabled
+      ? []
+      : load("audit", [
+          {
+            id: "a0",
+            ts: Date.now() - 3600000,
+            actor: "Aarav Mehta",
+            action: "approved",
+            target: "Monsoon sofa pack · v2",
+          },
+          {
+            id: "a1",
+            ts: Date.now() - 7200000,
+            actor: "Priya Nair",
+            action: "exported",
+            target: "Kadam sofa · 3 formats",
+          },
+        ]),
   );
 
   const workflowRunsRef = useRef(workflowRuns);
@@ -544,7 +594,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         run.id === id ? { ...run, ...patch, state, updatedAt: Date.now() } : run,
       );
     });
-    return true;
+    return accepted;
   };
 
   const settleReservation = (
@@ -729,9 +779,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const refreshServerState: Store["refreshServerState"] = async () => {
     if (!backendEnabled) return;
     const state = await getServerState();
+    if (state.workspace.role) setRole(state.workspace.role as Store["role"]);
     if (state.brand) {
       setBrand((current) => ({
         ...current,
+        id: state.brand?.id ?? current.id,
+        approvalStatus: state.brand?.approvalStatus ?? current.approvalStatus,
         ...state.brand?.profile,
         name: state.brand?.name ?? current.name,
         version: state.brand?.version ?? current.version,
@@ -770,6 +823,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     <Ctx.Provider
       value={{
         backendEnabled,
+        role,
         brand,
         setBrand,
         credits,

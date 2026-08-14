@@ -6,12 +6,14 @@ import {
   disconnectServerConnection,
   getServerChannelIdentities,
   getServerConnections,
+  startServerConnectorOAuth,
   verifyServerChannelIdentity,
 } from "../client/api";
 
 type Health = "connected" | "expiring" | "disconnected";
 type Connector = {
   id: string;
+  provider?: string;
   name: string;
   scope: string;
   health: Health;
@@ -47,29 +49,34 @@ export default function Connectors() {
     Awaited<ReturnType<typeof getServerChannelIdentities>>
   >([]);
   const [driveStatus, setDriveStatus] = useState("");
-  const [connectors, setConnectors] = useState<Connector[]>([
-    {
-      id: "whatsapp",
-      name: "WhatsApp Business",
-      scope: "messages, templates",
-      health: "connected",
-      detail: "Kia · +91 98••• ••210 · Meta Graph",
-    },
-    {
-      id: "drive",
-      name: "Google Drive",
-      scope: "drive.file (least-privilege)",
-      health: "expiring",
-      detail: "studio@kosmic.in · token expires in 3 days",
-    },
-    {
-      id: "meta",
-      name: "Meta / Instagram",
-      scope: "content_publish",
-      health: "disconnected",
-      detail: "Requires app review + business account",
-    },
-  ]);
+  const [oauthBusy, setOauthBusy] = useState("");
+  const [connectors, setConnectors] = useState<Connector[]>(
+    backendEnabled
+      ? []
+      : [
+          {
+            id: "whatsapp",
+            name: "WhatsApp Business",
+            scope: "messages, templates",
+            health: "connected",
+            detail: "Kia · +91 98••• ••210 · Meta Graph",
+          },
+          {
+            id: "drive",
+            name: "Google Drive",
+            scope: "drive.file (least-privilege)",
+            health: "expiring",
+            detail: "studio@kosmic.in · token expires in 3 days",
+          },
+          {
+            id: "meta",
+            name: "Meta / Instagram",
+            scope: "content_publish",
+            health: "disconnected",
+            detail: "Requires app review + business account",
+          },
+        ],
+  );
 
   useEffect(() => {
     if (!backendEnabled) return;
@@ -79,6 +86,7 @@ export default function Connectors() {
         setConnectors(
           connections.map((connection) => ({
             id: connection.id,
+            provider: connection.provider.toLowerCase(),
             name: connection.provider,
             scope: connection.scopes.join(", "),
             health:
@@ -105,11 +113,33 @@ export default function Connectors() {
       cs.map((c) => (c.id === id ? { ...c, health, detail: detail ?? c.detail } : c)),
     );
 
+  const startOAuth = async (connector: Connector) => {
+    if (!backendEnabled) {
+      setHealth(connector.id, "connected", "Connected · least-privilege");
+      logAudit("connected", connector.name);
+      return;
+    }
+    setServerError("");
+    setOauthBusy(connector.id);
+    try {
+      const result = await startServerConnectorOAuth(connector.provider ?? connector.id);
+      window.location.assign(result.authorizeUrl);
+    } catch (error) {
+      setServerError(
+        error instanceof Error
+          ? error.message
+          : "The connector OAuth flow could not be started. Configure provider credentials first.",
+      );
+    } finally {
+      setOauthBusy("");
+    }
+  };
+
   return (
     <div className="space-y-8">
       <PageHeader
         kicker="Phase 3 · Channels & connectors"
-        title="Connectors & channels"
+        title="Channels & delivery"
         desc="Jahaan customer already kaam karta hai wahin request, review aur approval. WhatsApp se trigger, Google Drive se assets, aur Meta/Instagram par export-first publishing — sab least-privilege scopes, token-health, aur explicit confirmation ke saath."
       />
 
@@ -133,31 +163,14 @@ export default function Connectors() {
                 <div className="mt-1 font-mono text-[10px] text-ink-soft">scopes: {c.scope}</div>
                 <div className="mt-4 flex gap-2">
                   {c.health === "disconnected" ? (
-                    <Btn
-                      onClick={() => {
-                        if (backendEnabled) {
-                          setServerError(
-                            "OAuth authorization must be completed by the configured connector adapter.",
-                          );
-                        } else {
-                          setHealth(c.id, "connected", "Connected · least-privilege");
-                          logAudit("connected", c.name);
-                        }
-                      }}
-                    >
-                      Connect
+                    <Btn onClick={() => void startOAuth(c)} disabled={oauthBusy === c.id}>
+                      {oauthBusy === c.id ? "Opening OAuth…" : "Connect"}
                     </Btn>
                   ) : (
                     <>
                       {c.health === "expiring" && (
-                        <Btn
-                          onClick={() => {
-                            setServerError(
-                              "OAuth re-authorization must be completed by the configured connector adapter.",
-                            );
-                          }}
-                        >
-                          Re-authorize
+                        <Btn onClick={() => void startOAuth(c)} disabled={oauthBusy === c.id}>
+                          {oauthBusy === c.id ? "Opening OAuth…" : "Re-authorize"}
                         </Btn>
                       )}
                       <Btn
@@ -247,20 +260,27 @@ export default function Connectors() {
         {/* WhatsApp thread */}
         <Panel title="WhatsApp · request → approval">
           <div className="space-y-3 p-5">
-            {THREAD.map((m, i) => (
-              <div
-                key={i}
-                className={`flex ${m.from === "user" ? "justify-end" : "justify-start"}`}
-              >
+            {backendEnabled ? (
+              <p className="text-sm text-ink-soft">
+                No live WhatsApp thread is available until a verified WhatsApp connection and
+                inbound message are present.
+              </p>
+            ) : (
+              THREAD.map((m, i) => (
                 <div
-                  className={`max-w-[80%] rounded-2xl px-3 py-2 text-[13px] leading-relaxed ${
-                    m.from === "user" ? "bg-leaf text-paper" : "bg-paper-deep text-ink"
-                  }`}
+                  key={i}
+                  className={`flex ${m.from === "user" ? "justify-end" : "justify-start"}`}
                 >
-                  {m.text}
+                  <div
+                    className={`max-w-[80%] rounded-2xl px-3 py-2 text-[13px] leading-relaxed ${
+                      m.from === "user" ? "bg-leaf text-paper" : "bg-paper-deep text-ink"
+                    }`}
+                  >
+                    {m.text}
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))
+            )}
             <p className="pt-2 font-mono text-[10px] leading-relaxed text-ink-soft">
               Sender mapped to workspace + role after verification · outside the 24h service window
               only approved templates are sent · publishing/destructive actions need explicit
@@ -273,14 +293,22 @@ export default function Connectors() {
         <div className="space-y-6">
           <Panel title="Google Drive · folder mapping">
             <div className="space-y-3 p-5 font-mono text-[12px]">
-              <div className="flex items-center justify-between">
-                <span className="text-ink-soft">Input folder</span>
-                <span>/Clients/Kosmic/incoming</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-ink-soft">Output folder</span>
-                <span>/Clients/Kosmic/approved</span>
-              </div>
+              {backendEnabled ? (
+                <p className="text-sm text-ink-soft">
+                  No folder mapping is configured for this workspace.
+                </p>
+              ) : (
+                <>
+                  <div className="flex items-center justify-between">
+                    <span className="text-ink-soft">Input folder</span>
+                    <span>/Clients/Kosmic/incoming</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-ink-soft">Output folder</span>
+                    <span>/Clients/Kosmic/approved</span>
+                  </div>
+                </>
+              )}
               <div className="flex items-center justify-between">
                 <span className="text-ink-soft">Sync</span>
                 <span className="text-leaf">content-hash · idempotent</span>
@@ -320,12 +348,15 @@ export default function Connectors() {
 
           <Panel title="Meta / Instagram · export-first publishing">
             <div className="space-y-3 p-5">
-              {[
-                ["Monsoon sofa · reel", "published", "ig_media 17984… · receipt ✓"],
-                ["Diwali carousel", "scheduled", "queued for 18:30 IST"],
-                ["Oak console · story", "draft", "export only — awaiting approval"],
-                ["Dining set · post", "failed", "media spec rejected — retry safe (no dup)"],
-              ].map(([title, state, note]) => {
+              {(backendEnabled
+                ? []
+                : [
+                    ["Monsoon sofa · reel", "published", "ig_media 17984… · receipt ✓"],
+                    ["Diwali carousel", "scheduled", "queued for 18:30 IST"],
+                    ["Oak console · story", "draft", "export only — awaiting approval"],
+                    ["Dining set · post", "failed", "media spec rejected — retry safe (no dup)"],
+                  ]
+              ).map(([title, state, note]) => {
                 const tint =
                   state === "published"
                     ? "text-leaf"
@@ -349,6 +380,9 @@ export default function Connectors() {
                   </div>
                 );
               })}
+              {backendEnabled && (
+                <p className="text-sm text-ink-soft">No live publish receipts are recorded yet.</p>
+              )}
               <p className="pt-1 font-mono text-[10px] leading-relaxed text-ink-soft">
                 Default is export/draft · publish needs approved output + confirmation showing
                 destination, caption & media · every publish returns a receipt or a retryable

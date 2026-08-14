@@ -1,5 +1,7 @@
 import { loadEnvFile } from "node:process";
+import { createHash } from "node:crypto";
 import { Prisma, PrismaClient } from "@prisma/client";
+import { localStorageEnabled, writeLocalObject } from "../src/server/storage";
 
 try {
   loadEnvFile(".env");
@@ -100,24 +102,45 @@ async function main() {
     },
   });
 
-  const sourceAsset = await prisma.asset.upsert({
-    where: {
-      workspaceId_contentHash: { workspaceId: workspace.id, contentHash: "demo-kadam-source-v1" },
-    },
-    update: { productId: product.id, brandId: brand.id, status: "IMMUTABLE" },
-    create: {
-      workspaceId: workspace.id,
-      brandId: brand.id,
-      productId: product.id,
-      type: "ORIGINAL",
-      status: "IMMUTABLE",
-      name: "kadam-sofa-source.jpg",
-      objectKey: "workspaces/workspace-autozentic-demo/assets/kadam-sofa-source.jpg",
-      contentHash: "demo-kadam-source-v1",
-      mimeType: "image/jpeg",
-      metadata: { source: "seed", rights: "demo-only" },
-    },
+  const sourceObjectKey = "workspaces/workspace-autozentic-demo/assets/kadam-sofa-source.jpg";
+  // This is a tiny valid JPEG fixture for local integration tests. Production
+  // workspaces always use uploaded customer assets and their real checksums.
+  const sourceBody = Buffer.from(
+    "ffd8ffe000104a46494600010100000100010000ffdb004300080606070605080707070909080a0c140d0c0b0b0c1912130f141d1a1f1e1d1a1c1c20242e2720222c231c1c2837292c30313434341f27393d38323c2e333432ffc00011080001000103012200021101031101ffc40014000100000000000000000000000000000000ffc40014100100000000000000000000000000000000ffda000c03010002110311003f00d2cf20ffd9",
+    "hex",
+  );
+  const sourceContentHash = createHash("sha256").update(sourceBody).digest("hex");
+  const existingSource = await prisma.asset.findFirst({
+    where: { workspaceId: workspace.id, name: "kadam-sofa-source.jpg" },
   });
+  const sourceAsset = existingSource
+    ? await prisma.asset.update({
+        where: { id: existingSource.id },
+        data: {
+          productId: product.id,
+          brandId: brand.id,
+          status: "IMMUTABLE",
+          objectKey: sourceObjectKey,
+          contentHash: sourceContentHash,
+          mimeType: "image/jpeg",
+          metadata: { source: "seed", rights: "demo-only", fixture: true },
+        },
+      })
+    : await prisma.asset.create({
+        data: {
+          workspaceId: workspace.id,
+          brandId: brand.id,
+          productId: product.id,
+          type: "ORIGINAL",
+          status: "IMMUTABLE",
+          name: "kadam-sofa-source.jpg",
+          objectKey: sourceObjectKey,
+          contentHash: sourceContentHash,
+          mimeType: "image/jpeg",
+          metadata: { source: "seed", rights: "demo-only", fixture: true },
+        },
+      });
+  if (localStorageEnabled()) await writeLocalObject(sourceObjectKey, sourceBody, "image/jpeg");
   await prisma.product.update({
     where: { id: product.id },
     data: { sourceAssetIds: [sourceAsset.id] },

@@ -3,6 +3,7 @@ import { ApiError } from "./api";
 import { db } from "./db";
 import { requireRole, type RequestContext } from "./auth";
 import { providerApiError, requestProvider } from "./provider-http";
+import { requiresProductionAuthentication } from "./runtime-config";
 
 function json(value: unknown) {
   return value as Prisma.InputJsonValue;
@@ -34,7 +35,7 @@ export async function createCheckout(
     throw new ApiError(400, "CHECKOUT_ITEM_REQUIRED", "units or plan is required.");
   const endpoint = providerUrl(input.provider, "checkout");
   if (!endpoint) {
-    if (process.env.NODE_ENV === "production")
+    if (requiresProductionAuthentication())
       throw new ApiError(
         503,
         "BILLING_CHECKOUT_NOT_CONFIGURED",
@@ -87,7 +88,7 @@ export async function requestRefund(
     : null;
   if (input.invoiceId && !invoice)
     throw new ApiError(404, "INVOICE_NOT_FOUND", "The invoice was not found in this workspace.");
-  if (process.env.NODE_ENV === "production" && !invoice)
+  if (requiresProductionAuthentication() && !invoice)
     throw new ApiError(
       400,
       "INVOICE_REQUIRED",
@@ -222,7 +223,7 @@ export async function updateSubscription(
         "The subscription adapter failed.",
       );
     }
-  } else if (process.env.NODE_ENV === "production") {
+  } else if (requiresProductionAuthentication()) {
     throw new ApiError(
       503,
       "SUBSCRIPTION_ADAPTER_NOT_CONFIGURED",

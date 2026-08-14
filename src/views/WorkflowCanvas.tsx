@@ -1,9 +1,24 @@
-import { useRef, useState, type PointerEvent } from "react";
+import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { PageHeader, Panel, Btn } from "../ui";
 import { useStore } from "../store";
 import { SAMPLE_IMAGES, img } from "../data";
+import {
+  createServerWorkflow,
+  createServerWorkflowVersion,
+  getServerWorkflows,
+  publishServerWorkflowVersion,
+} from "../client/api";
 
-type NodeType = "input" | "brand" | "model" | "condition" | "split" | "merge" | "review" | "export";
+type NodeType =
+  | "input"
+  | "brand"
+  | "model"
+  | "comparison"
+  | "condition"
+  | "split"
+  | "merge"
+  | "review"
+  | "export";
 type Node = { id: string; type: NodeType; x: number; y: number; title: string; sub: string };
 type Edge = [string, string];
 
@@ -12,6 +27,7 @@ const NODE_META: Record<NodeType, { color: string; glyph: string; kind: string; 
     input: { color: "#2e3a6e", glyph: "⌨", kind: "Guided brief" },
     brand: { color: "#a6410a", glyph: "❖", kind: "Brand memory" },
     model: { color: "#d1560f", glyph: "✦", kind: "Generate" },
+    comparison: { color: "#d1560f", glyph: "⇄", kind: "Compare models" },
     condition: { color: "#4a6b3f", glyph: "⑃", kind: "Condition", logic: true },
     split: { color: "#4a6b3f", glyph: "⋔", kind: "Split / list", logic: true },
     merge: { color: "#4a6b3f", glyph: "⋈", kind: "Merge", logic: true },
@@ -72,12 +88,98 @@ const RUN_ORDER = ["n1", "n2", "n3", "n4", "n5"];
 export default function WorkflowCanvas() {
   const { spend, backendEnabled } = useStore();
   const [nodes, setNodes] = useState<Node[]>(INITIAL_NODES);
-  const [edges] = useState<Edge[]>(INITIAL_EDGES);
+  const [edges, setEdges] = useState<Edge[]>(INITIAL_EDGES);
   const [active, setActive] = useState<string | null>(null);
   const [state, setState] = useState<"idle" | "running" | "paused" | "done">("idle");
   const [log, setLog] = useState<string[]>([]);
+  const [serverTemplateId, setServerTemplateId] = useState<string | null>(null);
+  const [serverVersionId, setServerVersionId] = useState<string | null>(null);
+  const [saveBusy, setSaveBusy] = useState(false);
   const drag = useRef<{ id: string; dx: number; dy: number } | null>(null);
   const surface = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!backendEnabled) return;
+    void getServerWorkflows()
+      .then((templates) => {
+        const template = templates.find(
+          (candidate) =>
+            candidate.category === "product-creative" && typeof candidate.id === "string",
+        );
+        if (!template) return;
+        setServerTemplateId(String(template.id));
+        const versions = Array.isArray(template.versions) ? template.versions : [];
+        const latest = versions.find(
+          (version) => version && typeof version === "object" && typeof version.id === "string",
+        );
+        if (latest) setServerVersionId(String((latest as Record<string, unknown>).id));
+        setLog(["✓ Loaded the workspace product-creative workflow."]);
+      })
+      .catch((error) => {
+        setLog([
+          error instanceof Error ? error.message : "The workspace workflow could not be loaded.",
+        ]);
+      });
+  }, [backendEnabled]);
+
+  const graphForServer = () => ({
+    nodes: nodes.map((node) => ({
+      id: node.id,
+      type:
+        node.type === "brand"
+          ? "brand_context"
+          : node.type === "model"
+            ? "image_generation"
+            : node.type === "comparison"
+              ? "model_comparison"
+              : node.type === "review"
+                ? "human_review"
+                : node.type,
+      config: {
+        title: node.title,
+        subtitle: node.sub,
+        canvas: { x: node.x, y: node.y },
+        ...(node.type === "model" ? { promptPrefix: node.title } : {}),
+      },
+    })),
+    edges: edges.map(([from, to]) => ({ from, to })),
+  });
+
+  const saveWorkflow = async () => {
+    if (!backendEnabled || saveBusy) return null;
+    setSaveBusy(true);
+    try {
+      const graph = graphForServer();
+      if (!serverTemplateId) {
+        const created = await createServerWorkflow({
+          name: "Canvas product creative",
+          category: "product-creative",
+          graph,
+        });
+        const templateId = String(created.template.id);
+        const versionId = String(created.version.id);
+        await publishServerWorkflowVersion(templateId, versionId);
+        setServerTemplateId(templateId);
+        setServerVersionId(versionId);
+        setLog(["✓ Workflow graph saved and published as v1.0.0."]);
+        return versionId;
+      }
+      const version = await createServerWorkflowVersion(serverTemplateId, {
+        version: `v${Date.now()}.0.0`,
+        graph,
+      });
+      const versionId = String(version.id);
+      await publishServerWorkflowVersion(serverTemplateId, versionId);
+      setServerVersionId(versionId);
+      setLog(["✓ New immutable workflow version saved and published."]);
+      return versionId;
+    } catch (error) {
+      setLog([error instanceof Error ? error.message : "The workflow could not be saved."]);
+      return null;
+    } finally {
+      setSaveBusy(false);
+    }
+  };
 
   const onPointerDown = (e: PointerEvent, id: string) => {
     const n = nodes.find((x) => x.id === id)!;
@@ -166,6 +268,11 @@ export default function WorkflowCanvas() {
         desc="Drag-and-drop builder — bina code ke workflow customize karo. Nodes ko ghumao, run karo, aur Human-checkpoint par workflow ruk kar approval maangta hai."
         right={
           <div className="flex items-center gap-2">
+            {backendEnabled && (
+              <Btn variant="line" onClick={() => void saveWorkflow()} disabled={saveBusy}>
+                {saveBusy ? "Saving…" : serverVersionId ? "Save version" : "Save workflow"}
+              </Btn>
+            )}
             {state === "paused" ? (
               <>
                 <Btn variant="line" onClick={refine}>

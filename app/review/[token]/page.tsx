@@ -27,6 +27,7 @@ export default function PublicReviewPage({ params }: { params: Promise<{ token: 
   const [comment, setComment] = useState("");
   const [commentRegion, setCommentRegion] = useState("asset");
   const [busy, setBusy] = useState(false);
+  const [selectedOutputIds, setSelectedOutputIds] = useState<string[]>([]);
 
   useEffect(() => {
     void fetch(`/api/v1/review-links/${token}`, { cache: "no-store" })
@@ -34,7 +35,9 @@ export default function PublicReviewPage({ params }: { params: Promise<{ token: 
         const body = await response.json();
         if (!response.ok)
           throw new Error(body.error?.message ?? "This review link is unavailable.");
-        setReview(body.data as ReviewLinkData);
+        const loaded = body.data as ReviewLinkData;
+        setReview(loaded);
+        setSelectedOutputIds(loaded.outputs.map((output) => output.id));
       })
       .catch((cause) =>
         setError(cause instanceof Error ? cause.message : "The review link is unavailable."),
@@ -48,7 +51,12 @@ export default function PublicReviewPage({ params }: { params: Promise<{ token: 
       const response = await fetch(`/api/v1/review-links/${token}/decision`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ decision, reason, reviewerName: name || "External reviewer" }),
+        body: JSON.stringify({
+          decision,
+          reason,
+          reviewerName: name || "External reviewer",
+          approvedOutputIds: decision === "approve" ? selectedOutputIds : undefined,
+        }),
       });
       const body = await response.json();
       if (!response.ok) throw new Error(body.error?.message ?? "The decision could not be saved.");
@@ -134,11 +142,25 @@ export default function PublicReviewPage({ params }: { params: Promise<{ token: 
         </section>
         <section className="rounded-2xl border border-line bg-card p-5">
           <h2 className="font-mono text-[11px] uppercase tracking-[0.12em] text-ink-soft">
-            Approved outputs
+            Output pack · select what to approve
           </h2>
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
             {review.outputs.map((output) => (
               <div key={output.id} className="rounded-lg border border-line p-3">
+                <label className="mb-2 flex items-center gap-2 text-xs text-ink-soft">
+                  <input
+                    type="checkbox"
+                    checked={selectedOutputIds.includes(output.id)}
+                    onChange={(event) =>
+                      setSelectedOutputIds((current) =>
+                        event.target.checked
+                          ? [...new Set([...current, output.id])]
+                          : current.filter((id) => id !== output.id),
+                      )
+                    }
+                  />
+                  Include in approval
+                </label>
                 {output.downloadUrl ? (
                   <img
                     src={output.downloadUrl}
@@ -231,11 +253,11 @@ export default function PublicReviewPage({ params }: { params: Promise<{ token: 
           {error && <p className="mt-3 text-sm text-saffron-deep">{error}</p>}
           <div className="mt-4 flex flex-wrap gap-2">
             <button
-              disabled={busy || blocked}
+              disabled={busy || blocked || selectedOutputIds.length === 0}
               onClick={() => void decide("approve")}
               className="rounded-lg bg-ink px-4 py-2 text-sm text-paper disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {blocked ? "Blocked by QA" : "Approve"}
+              {blocked ? "Blocked by QA" : `Approve selected · ${selectedOutputIds.length}`}
             </button>
             <button
               disabled={busy}

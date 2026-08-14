@@ -4,7 +4,15 @@ import { useStore } from "../store";
 import { STYLES } from "../data";
 import { FORMAT_REGISTRY, quoteProductLock, type QualityMode, uid } from "../domain";
 import ScoreCard, { DIMENSIONS, type ScoreRow, hasCritical } from "./ScoreCard";
-import { getServerAssetDownload, getServerAssets, getServerProducts } from "../client/api";
+import {
+  attachServerRunToCampaign,
+  getServerAssetDownload,
+  getServerAssets,
+  getServerCampaign,
+  getServerCampaigns,
+  getServerProducts,
+} from "../client/api";
+import CreativePassport from "./CreativePassport";
 
 type Stage = "brief" | "quote" | "running" | "result";
 
@@ -31,12 +39,19 @@ export default function ProductLock() {
   const [product, setProduct] = useState("Kadam 3-seater sofa");
   const [sku, setSku] = useState("KOS-SOF-114");
   const [scene, setScene] = useState(STYLES[0]);
-  const [count, setCount] = useState(4);
-  const [formats, setFormats] = useState<string[]>(["1:1", "4:5", "9:16"]);
+  const [count, setCount] = useState(3);
+  const [formats, setFormats] = useState<string[]>(["1:1", "4:5", "9:16", "16:9"]);
   const [step, setStep] = useState(0);
   const [runId, setRunId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [sourceUrl, setSourceUrl] = useState<string | null>(null);
+  const [sourceEvidence, setSourceEvidence] = useState<Record<string, unknown> | null>(null);
+  const [campaigns, setCampaigns] = useState<Record<string, unknown>[]>([]);
+  const [campaignId, setCampaignId] = useState("");
+  const [passport, setPassport] = useState<Record<string, unknown> | null>(null);
+  const [productFacts, setProductFacts] = useState<Record<string, unknown>>({});
+  const [showFacts, setShowFacts] = useState(false);
+  const [showCompare, setShowCompare] = useState(false);
 
   const quote = quoteProductLock({
     count,
@@ -63,33 +78,65 @@ export default function ProductLock() {
 
   useEffect(() => {
     if (!backendEnabled) return;
-    void Promise.all([getServerAssets(), getServerProducts()])
-      .then(async ([assets, products]) => {
+    void Promise.all([getServerAssets(), getServerProducts(), getServerCampaigns()])
+      .then(async ([assets, products, campaignRows]) => {
+        const availableCampaigns = campaignRows as Record<string, unknown>[];
+        setCampaigns(availableCampaigns);
+        if (!campaignId && availableCampaigns[0]?.id)
+          setCampaignId(String(availableCampaigns[0].id));
         const selectedProduct = products[0];
         if (selectedProduct) {
           setProduct(String(selectedProduct.title));
           setSku(String(selectedProduct.sku));
+          setProductFacts(
+            ((selectedProduct as Record<string, unknown>).facts as Record<string, unknown>) ?? {},
+          );
         } else {
           setProduct("");
           setSku("");
           setError("Import a verified product record before starting a Product-Lock run.");
         }
-        const source = assets.find(
-          (asset) =>
-            ["IMMUTABLE", "READY", "DERIVED"].includes(String(asset.status)) &&
-            String(asset.mimeType ?? "").startsWith("image/"),
-        );
-        if (source) setSourceUrl((await getServerAssetDownload(String(source.id))).url);
+        const productSourceIds = Array.isArray(selectedProduct?.sourceAssetIds)
+          ? selectedProduct.sourceAssetIds.map(String)
+          : [];
+        const source =
+          assets.find(
+            (asset) =>
+              productSourceIds.includes(String(asset.id)) &&
+              ["IMMUTABLE", "READY", "DERIVED"].includes(String(asset.status)) &&
+              String(asset.mimeType ?? "").startsWith("image/"),
+          ) ??
+          assets.find(
+            (asset) =>
+              ["IMMUTABLE", "READY", "DERIVED"].includes(String(asset.status)) &&
+              String(asset.mimeType ?? "").startsWith("image/"),
+          );
+        if (source) {
+          setSourceEvidence(source);
+          setSourceUrl((await getServerAssetDownload(String(source.id))).url);
+        }
       })
       .catch((reason) =>
         setError(
           reason instanceof Error ? reason.message : "The source asset could not be loaded.",
         ),
       );
-  }, [backendEnabled]);
+  }, [backendEnabled, campaignId]);
+
+  useEffect(() => {
+    if (!backendEnabled || !campaignId) return;
+    void getServerCampaign(campaignId)
+      .then((campaign) =>
+        setPassport(
+          ((campaign as Record<string, unknown>).passport as Record<string, unknown>) ?? null,
+        ),
+      )
+      .catch(() => setPassport(null));
+  }, [backendEnabled, campaignId, currentRun?.state]);
 
   useEffect(() => {
     if (!backendEnabled || !currentRun) return;
+    setStep(Math.min(currentRun.progress.completed, PIPELINE.length));
     if (currentRun.state === "awaiting_review") {
       setStep(PIPELINE.length);
       setStage("result");
@@ -108,6 +155,26 @@ export default function ProductLock() {
     };
   });
   const blocked = hasCritical(rows);
+  const evidencePending = !currentReview || !currentRun?.outputs?.length;
+  const generatedCompareOutput = currentRun?.outputs?.[0];
+  const sourceMetadata =
+    sourceEvidence?.metadata && typeof sourceEvidence.metadata === "object"
+      ? (sourceEvidence.metadata as Record<string, unknown>)
+      : {};
+  const sourceScans = Array.isArray(sourceEvidence?.scans) ? sourceEvidence.scans : [];
+  const failedSourceScan = sourceScans.some(
+    (scan) =>
+      scan &&
+      typeof scan === "object" &&
+      ["FAILED", "BLOCKED", "REQUIRES_PROVIDER"].includes(
+        String((scan as Record<string, unknown>).status),
+      ),
+  );
+  const sourceScanReady =
+    sourceEvidence &&
+    ["READY", "IMMUTABLE", "DERIVED"].includes(String(sourceEvidence.status)) &&
+    sourceMetadata.safetyGate !== "BLOCKED" &&
+    !failedSourceScan;
 
   const run = () => {
     setError("");
@@ -128,10 +195,22 @@ export default function ProductLock() {
         title: `${product} · ${scene} · ${count} variants`,
         brief,
         idempotencyKey: uid("brief"),
-      }).then((result) => {
+      }).then(async (result) => {
         if (result.error || !result.runId) {
           setError(result.error ?? "The server could not start this run.");
           return;
+        }
+        if (campaignId) {
+          try {
+            await attachServerRunToCampaign(campaignId, result.runId);
+          } catch (reason) {
+            setError(
+              reason instanceof Error
+                ? reason.message
+                : "The run was created but could not be attached to the campaign.",
+            );
+            return;
+          }
         }
         setRunId(result.runId);
         setStage("running");
@@ -155,7 +234,7 @@ export default function ProductLock() {
     <div className="space-y-8">
       <PageHeader
         kicker="P0 · Business / D2C beachhead"
-        title="Product-Lock Studio"
+        title="Truth Lock · Product Ad"
         desc="Upload a catalogue product; create controlled scene variants while the real product, its text, and its colours stay intact. Cost is shown before any work starts, and a critical integrity failure blocks publishing."
         right={
           stage !== "brief" && (
@@ -198,6 +277,20 @@ export default function ProductLock() {
                   onChange={(e) => setProduct(e.target.value)}
                   className={inp}
                 />
+              </Field>
+              <Field label="Campaign pack">
+                <select
+                  value={campaignId}
+                  onChange={(e) => setCampaignId(e.target.value)}
+                  className={inp}
+                >
+                  <option value="">Select campaign (recommended)</option>
+                  {campaigns.map((campaign) => (
+                    <option key={String(campaign.id)} value={String(campaign.id)}>
+                      {String(campaign.name)}
+                    </option>
+                  ))}
+                </select>
               </Field>
               <Field label="SKU">
                 <input value={sku} onChange={(e) => setSku(e.target.value)} className={inp} />
@@ -262,7 +355,7 @@ export default function ProductLock() {
                   Output formats
                 </span>
                 <div className="flex flex-wrap gap-1.5">
-                  {FORMAT_REGISTRY.slice(0, 3).map((format) => {
+                  {FORMAT_REGISTRY.slice(0, 4).map((format) => {
                     const active = formats.includes(format.ratio);
                     return (
                       <button
@@ -306,6 +399,107 @@ export default function ProductLock() {
               <div className="mt-3 font-mono text-[11px] text-ink-soft">
                 Original is immutable · {brand.name} memory applied · {brand.language} captions
               </div>
+              <div className="mt-4 rounded-lg border border-line bg-paper-deep p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-soft">
+                    Source quality
+                  </span>
+                  <span className={sourceScanReady ? "text-leaf" : "text-saffron-deep"}>
+                    {sourceScanReady ? "Verified source" : "Needs verified source"}
+                  </span>
+                </div>
+                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-paper">
+                  <div
+                    className={`h-full ${sourceScanReady ? "w-4/5 bg-leaf" : "w-1/5 bg-saffron-deep"}`}
+                  />
+                </div>
+                <p className="mt-2 font-mono text-[10px] text-ink-soft">
+                  {sourceScanReady
+                    ? `Source ${String(sourceEvidence?.status ?? "READY").toLowerCase()} · ${sourceScans.length} evidence scan(s), content hash and safety metadata retained; material claims still require evidence.`
+                    : failedSourceScan
+                      ? "A source malware/OCR/masking/integrity scan failed or needs a provider; Product-Lock is blocked."
+                      : "Upload and scan the original before using a product-lock route."}
+                </p>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Btn variant="line" onClick={() => setShowFacts((value) => !value)}>
+                  {showFacts ? "Hide product facts" : "Open product facts"}
+                </Btn>
+                {sourceUrl && (
+                  <Btn variant="line" onClick={() => setShowCompare((value) => !value)}>
+                    {showCompare ? "Hide source compare" : "Compare source"}
+                  </Btn>
+                )}
+              </div>
+              {showFacts && (
+                <div className="mt-3 rounded-lg border border-line px-3 py-3">
+                  <div className="font-mono text-[10px] uppercase text-ink-soft">
+                    Catalogue facts
+                  </div>
+                  {Object.keys(productFacts).length ? (
+                    <div className="mt-2 space-y-1 font-mono text-[10px] text-ink-soft">
+                      {Object.entries(productFacts)
+                        .slice(0, 12)
+                        .map(([key, value]) => (
+                          <div key={key} className="flex justify-between gap-3">
+                            <span>{key}</span>
+                            <span className="text-right text-ink">{String(value)}</span>
+                          </div>
+                        ))}
+                    </div>
+                  ) : (
+                    <p className="mt-2 font-mono text-[10px] text-saffron-deep">
+                      No structured catalogue facts are attached.
+                    </p>
+                  )}
+                </div>
+              )}
+              {showCompare && sourceUrl && (
+                <div className="mt-3 grid grid-cols-2 gap-2 rounded-lg border border-line p-2">
+                  <div>
+                    <img
+                      src={sourceUrl}
+                      alt="immutable source"
+                      className="aspect-square w-full rounded object-cover"
+                    />
+                    <div className="mt-1 font-mono text-[9px] text-ink-soft">
+                      Source · immutable
+                    </div>
+                  </div>
+                  <div className="rounded border border-line p-2">
+                    {generatedCompareOutput?.downloadUrl ? (
+                      <img
+                        src={generatedCompareOutput.downloadUrl}
+                        alt="generated product-lock output"
+                        className="aspect-square w-full rounded object-cover"
+                      />
+                    ) : (
+                      <div className="flex aspect-square items-center justify-center rounded border border-dashed border-line text-center font-mono text-[9px] text-ink-soft">
+                        {generatedCompareOutput
+                          ? "Signed generated preview unavailable; evidence is retained in the review manifest."
+                          : "Generate a server output to compare it with the immutable source."}
+                      </div>
+                    )}
+                    <div className="mt-1 font-mono text-[9px] text-ink-soft">
+                      {generatedCompareOutput
+                        ? `Generated · ${generatedCompareOutput.status} · ${generatedCompareOutput.format}`
+                        : "Generated · pending"}
+                    </div>
+                    {generatedCompareOutput?.qualityScores && (
+                      <div className="mt-1 font-mono text-[9px] text-ink-soft">
+                        Server quality evidence:{" "}
+                        {Object.keys(generatedCompareOutput.qualityScores).length} checks
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+              {mode === "creative" && (
+                <div className="mt-3 rounded-lg border border-saffron-deep/40 bg-saffron-deep/5 px-3 py-2 font-mono text-[10px] text-saffron-deep">
+                  Creative Concept mode may change product shape or colour. Product-lock proof and
+                  publish-safe claims do not carry over automatically.
+                </div>
+              )}
               <Btn className="mt-4 w-full" onClick={() => setStage("quote")}>
                 Get quote →
               </Btn>
@@ -429,12 +623,14 @@ export default function ProductLock() {
             </Panel>
             <div
               className={`rounded-2xl border px-5 py-4 ${
-                blocked ? "border-saffron-deep bg-saffron-deep/8" : "border-leaf bg-leaf/8"
+                blocked || evidencePending
+                  ? "border-saffron-deep bg-saffron-deep/8"
+                  : "border-leaf bg-leaf/8"
               }`}
             >
               <div className="text-sm font-medium">
-                {blocked
-                  ? "Integrity gate: publishing blocked until the critical failure is repaired."
+                {blocked || evidencePending
+                  ? "Integrity gate: publishing blocked until server evidence and human review are complete."
                   : "Integrity gate passed. Sent to the review inbox for human approval."}
               </div>
               <div className="mt-1 font-mono text-[11px] text-ink-soft">
@@ -453,6 +649,7 @@ export default function ProductLock() {
               <ScoreCard rows={rows} kind="static" />
             </div>
           </Panel>
+          <CreativePassport passport={passport} />
         </div>
       )}
     </div>

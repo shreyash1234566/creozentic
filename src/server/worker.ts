@@ -5,6 +5,7 @@ import Redis from "ioredis";
 import { db } from "./db";
 import {
   executeCreativeRequest,
+  type CreativeResult,
   ProviderExecutionError,
   ProviderNotConfiguredError,
 } from "./gateway";
@@ -16,8 +17,14 @@ import { recordDeadLetter } from "./dead-letter";
 import { createNotifications } from "./notifications";
 import { settleBatchRowForRun } from "./batch-service";
 import { runAssetGate } from "./asset-intelligence";
-import { workflowNodePlan, workflowReviewAndExportKeys } from "./workflow-catalog";
-import { executeWorkflowPreparation, workflowPromptForNode } from "./workflow-runtime";
+import { topologicalWorkflowNodePlan, workflowReviewAndExportKeys } from "./workflow-catalog";
+import {
+  executeWorkflowPreparation,
+  shouldRunWorkflowNode,
+  workflowPromptForNode,
+} from "./workflow-runtime";
+import { assertProductionConfiguration } from "./runtime-config";
+import { createMediaJob } from "./media-jobs";
 
 for (const envFile of [".env", ".env.local"]) {
   try {
@@ -29,7 +36,126 @@ for (const envFile of [".env", ".env.local"]) {
 
 type WorkflowJob = { runId: string; workspaceId: string; correlationId: string };
 
+function evidenceFromScan(
+  scan: { status: string; scanner: string; version: string | null } | null,
+) {
+  return scan
+    ? { status: scan.status, scanner: scan.scanner, version: scan.version ?? "unknown" }
+    : { status: "NOT_REQUIRED", scanner: "none", version: "1" };
+}
+
+function record(value: unknown) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function text(value: unknown) {
+  return typeof value === "string" ? value : "";
+}
+
+async function executeComposerNodes(input: {
+  runId: string;
+  workspaceId: string;
+  correlationId: string;
+  composerNodes: Array<{ id: string; config: Record<string, unknown> }>;
+  sourceAssetIds: string[];
+  formats: string[];
+  brief: Record<string, unknown>;
+  brand: Record<string, unknown>;
+}) {
+  const results: Array<{
+    outputAssetId: string;
+    format: string;
+    nodeKey: string;
+  }> = [];
+  const context = {
+    workspaceId: input.workspaceId,
+    userId: "system-runner",
+    role: "OWNER" as const,
+    correlationId: input.correlationId,
+  };
+  for (const node of input.composerNodes) {
+    await db.nodeRun.updateMany({
+      where: { runId: input.runId, nodeKey: node.id },
+      data: { state: NodeState.RUNNING, startedAt: new Date(), attempts: { increment: 1 } },
+    });
+    try {
+      for (const format of input.formats) {
+        const config = node.config;
+        const profile = record(input.brand.profile);
+        const colors = Array.isArray(profile.colors)
+          ? profile.colors.filter((value): value is string => typeof value === "string")
+          : [];
+        const job = await createMediaJob(context, {
+          kind: "composition.render",
+          sourceAssetIds: input.sourceAssetIds,
+          runId: input.runId,
+          config: {
+            templateId: text(config.templateId) || "daily-locked-poster",
+            ratio: text(config.ratio) || format,
+            accent: colors[0] ?? "#d1560f",
+            overlay: typeof config.overlay === "number" ? config.overlay : 20,
+            layers: Array.isArray(config.layers)
+              ? config.layers
+              : [
+                  { id: "logo", kind: "logo", text: text(input.brand.name) || "Brand", x: 8, y: 8 },
+                  {
+                    id: "headline",
+                    kind: "headline",
+                    text: text(input.brief.headline) || text(input.brief.product),
+                    x: 8,
+                    y: 22,
+                  },
+                  {
+                    id: "body",
+                    kind: "body",
+                    text: text(input.brief.body) || text(input.brief.scene),
+                    x: 8,
+                    y: 42,
+                  },
+                  {
+                    id: "cta",
+                    kind: "cta",
+                    text: text(input.brief.cta) || "Learn more",
+                    x: 8,
+                    y: 78,
+                  },
+                ],
+          },
+          idempotencyKey: `${input.runId}:composer:${node.id}:${format}`,
+        });
+        for (const outputAssetId of Array.isArray(job.job.outputAssetIds)
+          ? job.job.outputAssetIds.filter((value): value is string => typeof value === "string")
+          : []) {
+          results.push({ outputAssetId, format, nodeKey: node.id });
+        }
+      }
+      await db.nodeRun.updateMany({
+        where: { runId: input.runId, nodeKey: node.id },
+        data: {
+          state: NodeState.SUCCEEDED,
+          outputRefs: { outputAssetIds: results.filter((item) => item.nodeKey === node.id) },
+          completedAt: new Date(),
+        },
+      });
+    } catch (error) {
+      await db.nodeRun.updateMany({
+        where: { runId: input.runId, nodeKey: node.id },
+        data: {
+          state: NodeState.FAILED,
+          errorClass: "COMPOSER_FAILED",
+          errorMessage: error instanceof Error ? error.message : "Composer failed.",
+        },
+      });
+      throw error;
+    }
+  }
+  return results;
+}
+
 const redisUrl = process.env.REDIS_URL;
+assertProductionConfiguration("workflow worker");
 if (!redisUrl) throw new Error("REDIS_URL is required to start the Creozentic workflow worker.");
 
 const connection = new Redis(redisUrl, { maxRetriesPerRequest: null });
@@ -55,13 +181,20 @@ const worker = new Worker<WorkflowJob>(
     });
     if (batchRow?.batch.state === "PAUSED") return;
     if (batchRow?.batch.state === "CANCELLED") return;
-    const graphNodes = workflowNodePlan(run.workflowVersion.graph);
-    const generationNode = graphNodes.find(
-      (node) => node.type === "image_generation" || node.type === "image_edit",
+    // The persisted graph is the source of truth for execution order. A raw
+    // node-array order is only an authoring detail and must never decide which
+    // provider call runs first.
+    const graphNodes = topologicalWorkflowNodePlan(run.workflowVersion.graph);
+    const creativeNodes = graphNodes.filter(
+      (node) =>
+        node.type === "image_generation" ||
+        node.type === "image_edit" ||
+        node.type === "model_comparison",
     );
-    if (!generationNode)
+    const composerNodes = graphNodes.filter((node) => node.type === "composer");
+    if (!creativeNodes.length)
       throw new ProviderExecutionError(
-        "The workflow has no supported image generation or image edit node.",
+        "The workflow has no supported image generation, edit, or model comparison node.",
         "workflow-runtime",
         false,
       );
@@ -83,6 +216,8 @@ const worker = new Worker<WorkflowJob>(
         language?: string;
         cta?: string;
         scene?: string;
+        headline?: string;
+        body?: string;
       };
       const productSnapshot =
         run.productSnapshot && typeof run.productSnapshot === "object"
@@ -108,185 +243,440 @@ const worker = new Worker<WorkflowJob>(
         product: run.productSnapshot,
         idempotencyKeyPrefix: `${run.id}:prepare`,
       });
-      await db.nodeRun.updateMany({
-        where: { runId: run.id, nodeKey: generationNode.id },
-        data: { state: NodeState.RUNNING, startedAt: new Date(), attempts: { increment: 1 } },
-      });
-      const result = await executeCreativeRequest({
-        capability: generationNode.type === "image_edit" ? "image.edit" : "image.generate",
-        inputAssets,
-        prompt: workflowPromptForNode(generationNode, prepared.state, [
-          brief.product,
-          brief.sku,
-          brief.scene,
-          brief.audience,
-          brief.cta,
-        ]),
-        constraints: {
-          qualityMode: brief.qualityMode ?? "balanced",
-          productLock: brief.mode === "lock",
-          outputCount: brief.count,
-          locale: brief.language,
-          aspectRatio:
-            typeof generationNode.config.aspectRatio === "string"
-              ? generationNode.config.aspectRatio
-              : undefined,
-        },
-        workspaceId: job.data.workspaceId,
-        idempotencyKey: `${run.id}:${generationNode.id}`,
-      });
-      if (result.outputs.length === 0)
+      const runnableCreativeNodes = creativeNodes.filter((node) =>
+        shouldRunWorkflowNode(run.workflowVersion.graph, node.id, prepared.state),
+      );
+      const skippedCreativeNodes = creativeNodes.filter(
+        (node) => !runnableCreativeNodes.some((runnable) => runnable.id === node.id),
+      );
+      if (skippedCreativeNodes.length)
+        await db.nodeRun.updateMany({
+          where: { runId: run.id, nodeKey: { in: skippedCreativeNodes.map((node) => node.id) } },
+          data: {
+            state: NodeState.SUCCEEDED,
+            completedAt: new Date(),
+            outputRefs: { skipped: true, reason: "conditional branch not selected" },
+          },
+        });
+      if (!runnableCreativeNodes.length)
         throw new ProviderExecutionError(
-          "Provider returned no output assets.",
-          result.provider,
+          "The selected workflow branches produced no executable generation node.",
+          "workflow-runtime",
           false,
         );
-      await db.nodeRun.updateMany({
-        where: {
-          runId: run.id,
-          nodeKey: { notIn: [...controlNodes.review, ...controlNodes.export] },
-        },
-        data: {
-          state: NodeState.SUCCEEDED,
-          completedAt: new Date(),
-          errorClass: null,
-          errorMessage: null,
-        },
-      });
+      const requestedFormats = [...new Set(brief.outputFormats?.filter(Boolean) ?? [])];
+      if (!requestedFormats.length) requestedFormats.push("1:1");
+      const generationResults: Array<{
+        nodeKey: string;
+        format: string;
+        modelRef?: string;
+        result: CreativeResult;
+      }> = [];
+      // Each format is a distinct provider request with a stable idempotency key.
+      // This eliminates the previous one-ratio shortcut and makes costs traceable.
+      for (const generationNode of runnableCreativeNodes) {
+        await db.nodeRun.updateMany({
+          where: { runId: run.id, nodeKey: generationNode.id },
+          data: {
+            state: NodeState.RUNNING,
+            startedAt: new Date(),
+            attempts: { increment: 1 },
+            errorClass: null,
+            errorMessage: null,
+          },
+        });
+        const configuredModelRefs = Array.isArray(generationNode.config.modelRefs)
+          ? generationNode.config.modelRefs.filter(
+              (ref): ref is string => typeof ref === "string" && Boolean(ref.trim()),
+            )
+          : [];
+        const modelRefs =
+          generationNode.type === "model_comparison"
+            ? configuredModelRefs.length
+              ? configuredModelRefs.slice(0, 3)
+              : ["comparison-a", "comparison-b"]
+            : [
+                typeof generationNode.config.modelRef === "string"
+                  ? generationNode.config.modelRef
+                  : undefined,
+              ];
+        for (const modelRef of modelRefs) {
+          for (const format of requestedFormats) {
+            const result = await executeCreativeRequest({
+              capability: generationNode.type === "image_edit" ? "image.edit" : "image.generate",
+              inputAssets,
+              prompt: workflowPromptForNode(generationNode, prepared.state, [
+                brief.product,
+                brief.sku,
+                brief.scene,
+                brief.audience,
+                brief.cta,
+              ]),
+              constraints: {
+                qualityMode: brief.qualityMode ?? "balanced",
+                productLock: brief.mode === "lock",
+                outputCount: brief.count,
+                locale: brief.language,
+                aspectRatio:
+                  typeof generationNode.config.aspectRatio === "string"
+                    ? generationNode.config.aspectRatio
+                    : format,
+              },
+              workspaceId: job.data.workspaceId,
+              idempotencyKey: `${run.id}:${generationNode.id}:${modelRef ?? "default"}:${format}`,
+              modelRef,
+              brandContext: record(run.brandSnapshot),
+            });
+            generationResults.push({ nodeKey: generationNode.id, format, modelRef, result });
+          }
+        }
+        await db.nodeRun.updateMany({
+          where: { runId: run.id, nodeKey: generationNode.id },
+          data: {
+            state: NodeState.SUCCEEDED,
+            completedAt: new Date(),
+            outputRefs: {
+              formats: requestedFormats,
+              modelRefs: modelRefs.filter((value): value is string => typeof value === "string"),
+              outputCount: generationResults
+                .filter((entry) => entry.nodeKey === generationNode.id)
+                .reduce((total, entry) => total + entry.result.outputs.length, 0),
+            },
+          },
+        });
+        (prepared.state.nodes as Record<string, unknown>)[generationNode.id] = {
+          formats: requestedFormats,
+          modelRefs: modelRefs.filter((value): value is string => typeof value === "string"),
+          outputCount: generationResults
+            .filter((entry) => entry.nodeKey === generationNode.id)
+            .reduce((total, entry) => total + entry.result.outputs.length, 0),
+        };
+      }
+      const generatedProviderOutputs = generationResults.flatMap((entry) =>
+        entry.result.outputs.map((output) => ({ ...entry, output })),
+      );
+      if (generatedProviderOutputs.length === 0)
+        throw new ProviderExecutionError(
+          "Provider returned no output assets.",
+          generationResults[0]?.result.provider ?? "workflow-runtime",
+          false,
+        );
+      const runnableComposerNodes = composerNodes.filter((node) =>
+        shouldRunWorkflowNode(run.workflowVersion.graph, node.id, prepared.state),
+      );
+      const skippedComposerNodes = composerNodes.filter(
+        (node) => !runnableComposerNodes.some((runnable) => runnable.id === node.id),
+      );
+      if (skippedComposerNodes.length)
+        await db.nodeRun.updateMany({
+          where: { runId: run.id, nodeKey: { in: skippedComposerNodes.map((node) => node.id) } },
+          data: {
+            state: NodeState.SUCCEEDED,
+            completedAt: new Date(),
+            outputRefs: { skipped: true, reason: "conditional branch not selected" },
+          },
+        });
       await db.nodeRun.updateMany({
         where: { runId: run.id, nodeKey: { in: controlNodes.review } },
         data: { state: NodeState.AWAITING_REVIEW, completedAt: null },
       });
 
       const persistedOutputs = await db.$transaction(async (tx) => {
-        const providerCallId =
-          result.providerRequestId ?? `${run.id}:${result.provider}:image.generate`;
-        await tx.providerCost.upsert({
+        await Promise.all(
+          generationResults.map(({ nodeKey, format, modelRef, result }) => {
+            const providerCallId =
+              result.providerRequestId ??
+              `${run.id}:${nodeKey}:${modelRef ?? "default"}:${format}:${result.provider}`;
+            return tx.providerCost.upsert({
+              where: {
+                workspaceId_providerCallId: {
+                  workspaceId: job.data.workspaceId,
+                  providerCallId,
+                },
+              },
+              create: {
+                workspaceId: job.data.workspaceId,
+                runId: run.id,
+                provider: result.provider,
+                model: result.model,
+                modelVersion: result.modelVersion,
+                providerCallId,
+                rawUsage: result.usage,
+                costMinor: result.usage.providerCostMinor,
+                currency: result.usage.currency,
+                retry: job.attemptsMade > 0,
+              },
+              update: {
+                runId: run.id,
+                rawUsage: result.usage,
+                costMinor: result.usage.providerCostMinor,
+                currency: result.usage.currency,
+                retry: job.attemptsMade > 0,
+              },
+            });
+          }),
+        );
+        return Promise.all(
+          generatedProviderOutputs.map(
+            async ({ output, result, format, modelRef, nodeKey }, index) => {
+              if (!output.assetId || !output.mimeType || !output.objectKey || !output.contentHash)
+                throw new ProviderExecutionError(
+                  "Provider output is missing an asset ID, MIME type, storage object key, or content hash.",
+                  result.provider,
+                  false,
+                );
+              if (!isWorkspaceObjectKey(job.data.workspaceId, output.objectKey))
+                throw new ProviderExecutionError(
+                  "Provider output object key is outside the workspace namespace.",
+                  result.provider,
+                  false,
+                );
+              const stored = await verifyUploadedObject({ objectKey: output.objectKey });
+              const existing = await tx.asset.findUnique({
+                where: { id: output.assetId },
+                select: { id: true, workspaceId: true },
+              });
+              if (existing && existing.workspaceId !== job.data.workspaceId)
+                throw new ProviderExecutionError(
+                  "Provider output asset ID belongs to another workspace.",
+                  result.provider,
+                  false,
+                );
+              const asset = existing
+                ? await tx.asset.update({
+                    where: { id: existing.id },
+                    data: {
+                      status: "READY",
+                      name: output.name ?? `generated-${index + 1}`,
+                      objectKey: output.objectKey,
+                      contentHash: output.contentHash,
+                      mimeType: output.mimeType,
+                      byteSize: stored.byteSize,
+                      width: output.width,
+                      height: output.height,
+                      metadata: output.metadata
+                        ? (output.metadata as Prisma.InputJsonValue)
+                        : undefined,
+                    },
+                  })
+                : await tx.asset.create({
+                    data: {
+                      id: output.assetId,
+                      workspaceId: job.data.workspaceId,
+                      type: "GENERATED",
+                      status: "READY",
+                      name: output.name ?? `generated-${index + 1}`,
+                      objectKey: output.objectKey,
+                      contentHash: output.contentHash,
+                      mimeType: output.mimeType,
+                      byteSize: stored.byteSize,
+                      width: output.width,
+                      height: output.height,
+                      metadata: output.metadata
+                        ? (output.metadata as Prisma.InputJsonValue)
+                        : undefined,
+                    },
+                  });
+              return { asset, output, result, format, modelRef, nodeKey };
+            },
+          ),
+        );
+      });
+
+      const comparisonNodes = runnableCreativeNodes.filter(
+        (node) => node.type === "model_comparison",
+      );
+      for (const comparisonNode of comparisonNodes) {
+        const comparison = await db.modelComparison.upsert({
           where: {
-            workspaceId_providerCallId: {
+            workspaceId_idempotencyKey: {
               workspaceId: job.data.workspaceId,
-              providerCallId,
+              idempotencyKey: `${run.id}:workflow-comparison:${comparisonNode.id}`,
+            },
+          },
+          update: {
+            status: "COMPLETED",
+            constraints: {
+              formats: requestedFormats,
+              runId: run.id,
+              nodeKey: comparisonNode.id,
             },
           },
           create: {
             workspaceId: job.data.workspaceId,
-            runId: run.id,
+            createdBy: "system-runner",
+            prompt: workflowPromptForNode(comparisonNode, prepared.state, [
+              brief.product,
+              brief.scene,
+              brief.audience,
+              brief.cta,
+            ]),
+            constraints: {
+              formats: requestedFormats,
+              runId: run.id,
+              nodeKey: comparisonNode.id,
+            },
+            status: "COMPLETED",
+            idempotencyKey: `${run.id}:workflow-comparison:${comparisonNode.id}`,
+          },
+        });
+        const comparisonOutputs = persistedOutputs.filter(
+          (entry) => entry.nodeKey === comparisonNode.id,
+        );
+        for (const [comparisonIndex, entry] of comparisonOutputs.entries()) {
+          const model = entry.modelRef ?? entry.result.model;
+          const format = entry.format;
+          const outputId = `${comparison.id}:${model}:${format}:${comparisonIndex}`;
+          await db.modelComparisonOutput.upsert({
+            where: { id: outputId },
+            update: {
+              provider: entry.result.provider,
+              model,
+              status: "COMPLETED",
+              assetId: entry.asset.id,
+              quote: {
+                format,
+                providerCostMinor: entry.result.usage.providerCostMinor,
+                currency: entry.result.usage.currency,
+              },
+              metadata: {
+                providerModel: entry.result.model,
+                providerVersion: entry.result.modelVersion,
+                requestedModelRef: entry.modelRef ?? null,
+                contentHash: entry.asset.contentHash,
+              },
+            },
+            create: {
+              id: outputId,
+              workspaceId: job.data.workspaceId,
+              comparisonId: comparison.id,
+              provider: entry.result.provider,
+              model,
+              status: "COMPLETED",
+              assetId: entry.asset.id,
+              quote: {
+                format,
+                providerCostMinor: entry.result.usage.providerCostMinor,
+                currency: entry.result.usage.currency,
+              },
+              metadata: {
+                providerModel: entry.result.model,
+                providerVersion: entry.result.modelVersion,
+                requestedModelRef: entry.modelRef ?? null,
+                contentHash: entry.asset.contentHash,
+              },
+            },
+          });
+        }
+      }
+
+      const generatedOutputRecords = persistedOutputs.map(
+        ({ asset, output, result, format, modelRef, nodeKey }, index) => ({
+          id: `${run.id}-output-${index}`,
+          assetId: asset.id,
+          name: output.name ?? asset.name,
+          format: output.format ?? format,
+          width: output.width,
+          height: output.height,
+          metadata: {
+            ...(output.metadata ?? {}),
             provider: result.provider,
             model: result.model,
             modelVersion: result.modelVersion,
-            providerCallId,
-            rawUsage: result.usage,
-            costMinor: result.usage.providerCostMinor,
-            currency: result.usage.currency,
-            retry: job.attemptsMade > 0,
+            requestedModelRef: modelRef,
+            contentHash: asset.contentHash,
+            objectKey: asset.objectKey,
+            workflowNode: nodeKey,
           },
-          update: {
+        }),
+      );
+      const composerResults = runnableComposerNodes.length
+        ? await executeComposerNodes({
             runId: run.id,
-            rawUsage: result.usage,
-            costMinor: result.usage.providerCostMinor,
-            currency: result.usage.currency,
-            retry: job.attemptsMade > 0,
+            workspaceId: job.data.workspaceId,
+            correlationId: job.data.correlationId,
+            composerNodes: runnableComposerNodes,
+            sourceAssetIds: persistedOutputs.map(({ asset }) => asset.id),
+            formats: requestedFormats,
+            brief: {
+              ...brief,
+              headline: text(brief.headline) || text(brief.product),
+              body: text(brief.body) || text(brief.scene),
+            },
+            brand: record(run.brandSnapshot),
+          })
+        : [];
+      const composedOutputAssets = composerResults.length
+        ? await db.outputAsset.findMany({
+            where: {
+              id: { in: composerResults.map((item) => item.outputAssetId) },
+              workspaceId: job.data.workspaceId,
+            },
+            include: { asset: true },
+          })
+        : [];
+      const composedOutputs = composedOutputAssets.map((output) => {
+        const composition = composerResults.find((item) => item.outputAssetId === output.id);
+        return {
+          id: output.id,
+          assetId: output.assetId,
+          name: output.name,
+          format: composition?.format ?? output.format,
+          width: output.width,
+          height: output.height,
+          metadata: {
+            ...record(output.metadata),
+            provider: "media-renderer",
+            contentHash: output.asset?.contentHash,
+            objectKey: output.asset?.objectKey,
+            workflowNode: composition?.nodeKey,
           },
-        });
-        return Promise.all(
-          result.outputs.map(async (output, index) => {
-            if (!output.assetId || !output.mimeType || !output.objectKey || !output.contentHash)
-              throw new ProviderExecutionError(
-                "Provider output is missing an asset ID, MIME type, storage object key, or content hash.",
-                result.provider,
-                false,
-              );
-            if (!isWorkspaceObjectKey(job.data.workspaceId, output.objectKey))
-              throw new ProviderExecutionError(
-                "Provider output object key is outside the workspace namespace.",
-                result.provider,
-                false,
-              );
-            const stored = await verifyUploadedObject({ objectKey: output.objectKey });
-            const existing = await tx.asset.findUnique({
-              where: { id: output.assetId },
-              select: { id: true, workspaceId: true },
-            });
-            if (existing && existing.workspaceId !== job.data.workspaceId)
-              throw new ProviderExecutionError(
-                "Provider output asset ID belongs to another workspace.",
-                result.provider,
-                false,
-              );
-            const asset = existing
-              ? await tx.asset.update({
-                  where: { id: existing.id },
-                  data: {
-                    status: "READY",
-                    name: output.name ?? `generated-${index + 1}`,
-                    objectKey: output.objectKey,
-                    contentHash: output.contentHash,
-                    mimeType: output.mimeType,
-                    byteSize: stored.byteSize,
-                    width: output.width,
-                    height: output.height,
-                    metadata: output.metadata
-                      ? (output.metadata as Prisma.InputJsonValue)
-                      : undefined,
-                  },
-                })
-              : await tx.asset.create({
-                  data: {
-                    id: output.assetId,
-                    workspaceId: job.data.workspaceId,
-                    type: "GENERATED",
-                    status: "READY",
-                    name: output.name ?? `generated-${index + 1}`,
-                    objectKey: output.objectKey,
-                    contentHash: output.contentHash,
-                    mimeType: output.mimeType,
-                    byteSize: stored.byteSize,
-                    width: output.width,
-                    height: output.height,
-                    metadata: output.metadata
-                      ? (output.metadata as Prisma.InputJsonValue)
-                      : undefined,
-                  },
-                });
-            return { asset, output };
-          }),
-        );
+        };
       });
-
-      const outputs = persistedOutputs.map(({ asset, output }, index) => ({
-        id: `${run.id}-output-${index}`,
-        assetId: asset.id,
-        name: output.name ?? asset.name,
-        format: output.format ?? brief.outputFormats?.[index] ?? "1:1",
-        width: output.width,
-        height: output.height,
-        metadata: {
-          ...(output.metadata ?? {}),
-          provider: result.provider,
-          model: result.model,
-          modelVersion: result.modelVersion,
-          contentHash: asset.contentHash,
-          objectKey: asset.objectKey,
-        },
+      const outputs = [...generatedOutputRecords, ...composedOutputs].map((output) => ({
+        ...output,
+        assetId: output.assetId ?? undefined,
+        width: output.width ?? undefined,
+        height: output.height ?? undefined,
       }));
       const outputGates = await Promise.all(
-        persistedOutputs.map(({ asset }) => runAssetGate(safetyContext, asset.id)),
+        [
+          ...persistedOutputs.map(({ asset }) => asset),
+          ...composedOutputAssets.map((output) => output.asset).filter(Boolean),
+        ].map((asset) => runAssetGate(safetyContext, asset!.id)),
       );
-      const checkedOutputs = result.outputs.map((output, index) => ({
+      const checkedOutputs = outputs.map((output, index) => ({
         ...output,
+        objectKey:
+          typeof output.metadata?.objectKey === "string" ? output.metadata.objectKey : undefined,
+        contentHash:
+          typeof output.metadata?.contentHash === "string"
+            ? output.metadata.contentHash
+            : undefined,
         metadata: {
           ...(output.metadata ?? {}),
           outputSafety: outputGates[index],
           ocrChecked: outputGates[index]?.ocr?.status === "PASSED",
           maskingChecked: outputGates[index]?.masking?.status === "PASSED",
           integrityChecked: outputGates[index]?.integrity?.status === "PASSED",
+          // These records come from the persisted output-asset gates. They are
+          // evidence, not a caller-provided pass flag. Product, claim, brand,
+          // typography, rights, and safe-area evidence remains provider-backed.
+          ocrEvidence: evidenceFromScan(outputGates[index]?.ocr ?? null),
+          maskingEvidence: evidenceFromScan(outputGates[index]?.masking ?? null),
+          integrityEvidence: evidenceFromScan(outputGates[index]?.integrity ?? null),
         },
       }));
       const verdicts = evaluateCreativeOutputs(brief as ProductLockBrief, checkedOutputs);
       await db.nodeRun.updateMany({
         where: {
           runId: run.id,
-          nodeKey: { notIn: [...controlNodes.review, ...controlNodes.export] },
+          nodeKey: {
+            in: [
+              ...runnableCreativeNodes.map((node) => node.id),
+              ...runnableComposerNodes.map((node) => node.id),
+            ],
+          },
         },
         data: { state: NodeState.SUCCEEDED, completedAt: new Date(), outputRefs: { verdicts } },
       });
@@ -298,7 +688,15 @@ const worker = new Worker<WorkflowJob>(
           correlationId: job.data.correlationId,
         },
         run.id,
-        { outputs, verdicts, actualUnits: result.usage.outputUnits ?? result.outputs.length },
+        {
+          outputs,
+          verdicts,
+          actualUnits: generationResults.reduce(
+            (total, entry) =>
+              total + (entry.result.usage.outputUnits ?? entry.result.outputs.length),
+            0,
+          ),
+        },
       );
       await settleBatchRowForRun(job.data.workspaceId, run.id, "COMPLETED");
       await createNotifications({

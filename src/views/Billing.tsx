@@ -1,7 +1,15 @@
 import { useEffect, useState } from "react";
 import { PageHeader, Panel, Btn, Stat } from "../ui";
 import { useStore, type Seat } from "../store";
-import { createServerTopup, getServerUsage } from "../client/api";
+import {
+  createServerCheckout,
+  createServerTopup,
+  getServerBilling,
+  getServerRefunds,
+  getServerUsage,
+  requestServerRefund,
+  updateServerSubscription,
+} from "../client/api";
 
 const PLANS = [
   {
@@ -48,11 +56,24 @@ export default function Billing() {
     providerCostMinor: number;
     providerCostCurrency: string;
   } | null>(null);
+  const [billingRecords, setBillingRecords] = useState<{
+    subscriptions: Array<Record<string, unknown>>;
+    invoices: Array<Record<string, unknown>>;
+    events: Array<Record<string, unknown>>;
+  } | null>(null);
+  const [refunds, setRefunds] = useState<Array<Record<string, unknown>>>([]);
+  const [refundReason, setRefundReason] = useState("");
+  const [refundAmount, setRefundAmount] = useState("");
+  const [billingBusy, setBillingBusy] = useState("");
 
   useEffect(() => {
     if (!backendEnabled) return;
-    void getServerUsage()
-      .then((usage) => setServerUsage(usage.summary))
+    void Promise.all([getServerUsage(), getServerBilling(), getServerRefunds()])
+      .then(([usage, records, refundRows]) => {
+        setServerUsage(usage.summary);
+        setBillingRecords(records);
+        setRefunds(refundRows);
+      })
       .catch(() => undefined);
   }, [backendEnabled]);
 
@@ -63,6 +84,98 @@ export default function Billing() {
     if (!newSeat.name || !newSeat.email) return;
     addSeat(newSeat);
     setNewSeat({ name: "", email: "", role: "Editor" });
+  };
+
+  const choosePlan = async (plan: (typeof PLANS)[number]) => {
+    if (!backendEnabled) return;
+    setBillingError("");
+    setBillingBusy(`plan:${plan.name}`);
+    try {
+      const result = await createServerCheckout({
+        provider: gateway,
+        plan: plan.name,
+        units: plan.credits,
+        amountMinor: plan.inr * 100,
+        idempotencyKey: `plan:${gateway}:${plan.name}:${Date.now()}`,
+      });
+      const checkoutUrl = typeof result.checkoutUrl === "string" ? result.checkoutUrl : "";
+      if (checkoutUrl) window.location.assign(checkoutUrl);
+      else
+        setBillingError(String(result.message ?? "Checkout is awaiting provider configuration."));
+    } catch (error) {
+      setBillingError(error instanceof Error ? error.message : "Checkout could not be started.");
+    } finally {
+      setBillingBusy("");
+    }
+  };
+
+  const cancelSubscription = async (subscription: Record<string, unknown>) => {
+    setBillingBusy(`subscription:${String(subscription.id)}`);
+    try {
+      await updateServerSubscription(
+        String(subscription.id),
+        !Boolean(subscription.cancelAtPeriodEnd),
+      );
+      const records = await getServerBilling();
+      setBillingRecords(records);
+    } catch (error) {
+      setBillingError(error instanceof Error ? error.message : "Subscription update failed.");
+    } finally {
+      setBillingBusy("");
+    }
+  };
+
+  const requestRefund = async () => {
+    const amount = Number(refundAmount);
+    if (!Number.isFinite(amount) || amount <= 0 || !refundReason.trim()) return;
+    setBillingBusy("refund");
+    try {
+      const invoice = billingRecords?.invoices.find((item) =>
+        /paid|succeeded|complete/i.test(String(item.status)),
+      );
+      await requestServerRefund({
+        provider: gateway,
+        invoiceId: invoice ? String(invoice.id) : undefined,
+        amountMinor: Math.floor(amount),
+        reason: refundReason.trim(),
+        idempotencyKey: `refund:${gateway}:${Math.floor(amount)}:${Date.now()}`,
+      });
+      setRefunds(await getServerRefunds());
+      setRefundReason("");
+      setRefundAmount("");
+    } catch (error) {
+      setBillingError(error instanceof Error ? error.message : "Refund request failed.");
+    } finally {
+      setBillingBusy("");
+    }
+  };
+
+  const startTopup = async (units: number) => {
+    setBillingError("");
+    if (!backendEnabled) {
+      topup(units);
+      return;
+    }
+    setBillingBusy(`topup:${units}`);
+    try {
+      const result = await createServerTopup({
+        units,
+        provider: gateway,
+        idempotencyKey: `topup-${gateway}-${units}-${Date.now()}`,
+      });
+      if (result.checkoutUrl) window.location.assign(result.checkoutUrl);
+      else
+        setBillingError(
+          String(
+            (result as Record<string, unknown>).message ??
+              "Checkout is awaiting provider configuration.",
+          ),
+        );
+    } catch (error) {
+      setBillingError(error instanceof Error ? error.message : "Checkout is not configured.");
+    } finally {
+      setBillingBusy("");
+    }
   };
 
   return (
@@ -116,22 +229,8 @@ export default function Billing() {
               {TOPUPS.map((t) => (
                 <button
                   key={t}
-                  onClick={() => {
-                    setBillingError("");
-                    if (!backendEnabled) {
-                      topup(t);
-                      return;
-                    }
-                    void createServerTopup({
-                      units: t,
-                      provider: gateway,
-                      idempotencyKey: `topup-${gateway}-${t}-${Date.now()}`,
-                    }).catch((error) =>
-                      setBillingError(
-                        error instanceof Error ? error.message : "Checkout is not configured.",
-                      ),
-                    );
-                  }}
+                  onClick={() => void startTopup(t)}
+                  disabled={billingBusy !== ""}
                   className="rounded-xl border border-line py-4 text-center transition-colors hover:border-saffron-deep hover:bg-paper-deep"
                 >
                   <div className="font-display text-xl font-medium text-saffron-deep">+{t}</div>
@@ -214,13 +313,124 @@ export default function Billing() {
                   </li>
                 ))}
               </ul>
-              <Btn variant={p.popular ? "solid" : "line"} className="mt-5 w-full">
+              <Btn
+                variant={p.popular ? "solid" : "line"}
+                className="mt-5 w-full"
+                onClick={() => void choosePlan(p)}
+                disabled={!backendEnabled || billingBusy !== ""}
+              >
                 Choose {p.name}
               </Btn>
             </div>
           ))}
         </div>
       </div>
+
+      {backendEnabled && (
+        <div className="grid gap-6 lg:grid-cols-2">
+          <Panel title="Subscriptions & invoices">
+            <div className="divide-y divide-line">
+              {(billingRecords?.subscriptions ?? []).map((subscription) => (
+                <div key={String(subscription.id)} className="space-y-2 px-5 py-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="font-medium">{String(subscription.plan)}</span>
+                    <span className="font-mono text-[10px] uppercase text-ink-soft">
+                      {String(subscription.status)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between font-mono text-[10px] text-ink-soft">
+                    <span>
+                      {String(subscription.provider)} · period end{" "}
+                      {String(subscription.currentPeriodEnd ?? "—").slice(0, 10)}
+                    </span>
+                    <Btn
+                      variant="line"
+                      onClick={() => void cancelSubscription(subscription)}
+                      disabled={billingBusy !== ""}
+                    >
+                      {subscription.cancelAtPeriodEnd
+                        ? "Keep subscription"
+                        : "Cancel at period end"}
+                    </Btn>
+                  </div>
+                </div>
+              ))}
+              {(billingRecords?.subscriptions ?? []).length === 0 && (
+                <p className="px-5 py-4 text-sm text-ink-soft">
+                  No live subscription is recorded yet.
+                </p>
+              )}
+            </div>
+            <div className="border-t border-line p-5">
+              <div className="mb-2 font-mono text-[10px] uppercase text-ink-soft">
+                Recent invoices
+              </div>
+              <div className="space-y-2">
+                {(billingRecords?.invoices ?? []).slice(0, 5).map((invoice) => (
+                  <div
+                    key={String(invoice.id)}
+                    className="flex justify-between gap-3 font-mono text-[10px]"
+                  >
+                    <span>
+                      {String(invoice.externalId)} · {String(invoice.status)}
+                    </span>
+                    <span>
+                      {String(invoice.currency)} {(Number(invoice.amountMinor) / 100).toFixed(2)}
+                    </span>
+                  </div>
+                ))}
+                {(billingRecords?.invoices ?? []).length === 0 && (
+                  <span className="font-mono text-[10px] text-ink-soft">No invoices recorded.</span>
+                )}
+              </div>
+            </div>
+          </Panel>
+          <Panel title="Refunds">
+            <div className="space-y-3 p-5">
+              <div className="grid grid-cols-[120px_1fr] gap-2">
+                <input
+                  value={refundAmount}
+                  onChange={(event) => setRefundAmount(event.target.value)}
+                  placeholder="amount minor"
+                  inputMode="numeric"
+                  className="rounded-lg border border-line bg-paper px-3 py-2 text-sm"
+                />
+                <input
+                  value={refundReason}
+                  onChange={(event) => setRefundReason(event.target.value)}
+                  placeholder="Reason for refund"
+                  className="rounded-lg border border-line bg-paper px-3 py-2 text-sm"
+                />
+              </div>
+              <Btn
+                onClick={() => void requestRefund()}
+                disabled={billingBusy !== "" || !refundReason.trim() || !refundAmount}
+              >
+                Request refund
+              </Btn>
+              <div className="space-y-2 border-t border-line pt-3">
+                {refunds.slice(0, 6).map((refund) => (
+                  <div
+                    key={String(refund.id)}
+                    className="flex justify-between gap-3 font-mono text-[10px]"
+                  >
+                    <span>{String(refund.reason).slice(0, 36)}</span>
+                    <span>
+                      {String(refund.status)} · {String(refund.currency)}{" "}
+                      {(Number(refund.amountMinor) / 100).toFixed(2)}
+                    </span>
+                  </div>
+                ))}
+                {refunds.length === 0 && (
+                  <span className="font-mono text-[10px] text-ink-soft">
+                    No refund requests recorded.
+                  </span>
+                )}
+              </div>
+            </div>
+          </Panel>
+        </div>
+      )}
 
       {/* teams */}
       <Panel title="Team & seats">

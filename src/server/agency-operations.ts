@@ -37,6 +37,7 @@ export async function syncAgencyWorkItem(context: RequestContext, planId: string
     where: { workspaceId_dailyPlanId: { workspaceId: context.workspaceId, dailyPlanId: plan.id } },
     update: {
       brandId: plan.brandId,
+      clientName: plan.brand?.name ?? null,
       title: `${plan.brand?.name ?? "Brand"} daily creative`,
       status: statusForPlan(plan.status),
       turnaroundHours,
@@ -47,6 +48,7 @@ export async function syncAgencyWorkItem(context: RequestContext, planId: string
     create: {
       workspaceId: context.workspaceId,
       brandId: plan.brandId,
+      clientName: plan.brand?.name,
       dailyPlanId: plan.id,
       title: `${plan.brand?.name ?? "Brand"} daily creative`,
       status: statusForPlan(plan.status),

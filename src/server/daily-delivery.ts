@@ -68,6 +68,12 @@ export async function exportDailyPlan(context: RequestContext, planId: string) {
         "Every approved creative output must have a workspace-scoped asset.",
       );
     const copy = record(creative.copySlots);
+    if (typeof copy.altText !== "string" || !copy.altText.trim())
+      throw new ApiError(
+        409,
+        "DAILY_ALT_TEXT_REQUIRED",
+        "Every approved creative must include generated alt text before export.",
+      );
     entries.push({
       creativePlanId: creative.id,
       contentType: creative.contentType,
@@ -87,8 +93,10 @@ export async function exportDailyPlan(context: RequestContext, planId: string) {
       caption: copy.body,
       headline: copy.headline,
       cta: copy.cta,
-      altText: `${copy.headline ?? plan.brand?.name ?? "Approved creative"} — accessible description required before channel publishing.`,
+      altText: copy.altText,
+      hashtags: strings(copy.hashtags),
       disclosure: copy.disclosure,
+      copyEvidence: copy.copyEvidence,
       evidenceIds: creative.evidenceIds,
       rights: {
         sourceAssets: creative.sourceAssetIds,

@@ -9,6 +9,19 @@ type CreativeOutput = {
   format?: string;
 };
 
+type Evidence = { status?: unknown; version?: unknown; provider?: unknown; scanner?: unknown };
+
+function positiveEvidence(metadata: Record<string, unknown>, key: string) {
+  const value = metadata[key];
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const evidence = value as Evidence;
+  return (
+    evidence.status === "PASSED" &&
+    typeof evidence.version === "string" &&
+    Boolean(evidence.provider ?? evidence.scanner)
+  );
+}
+
 export function evaluateCreativeOutputs(
   brief: ProductLockBrief,
   outputs: CreativeOutput[],
@@ -16,54 +29,53 @@ export function evaluateCreativeOutputs(
   const metadata = outputs.map((output) => output.metadata ?? {});
   const hasCritical = (key: string) =>
     metadata.some((item) => item[key] === false || item[key] === "critical");
-  const hasPositive = (key: string) => metadata.every((item) => item[key] === true);
-  const hasVerifiedSafetyEvidence = (key: string) =>
-    metadata.length > 0 && metadata.every((item) => item[key] === true);
+  const allEvidence = (...keys: string[]) =>
+    metadata.length > 0 &&
+    metadata.every((item) => keys.every((key) => positiveEvidence(item, key)));
   const formatsValid =
     outputs.length > 0 &&
     outputs.every((output) =>
       Boolean(output.width && output.height && output.objectKey && output.contentHash),
     );
-  const checks: Record<string, QualityCheck> = {
+  const lock = brief.mode === "lock";
+  const productEvidenceComplete = allEvidence(
+    "productIdentityEvidence",
+    "maskingEvidence",
+    "integrityEvidence",
+  );
+  const brandEvidenceComplete = allEvidence("brandEvidence", "ocrEvidence", "typographyEvidence");
+  const claimEvidenceComplete = allEvidence("claimEvidence", "ocrEvidence");
+  const rightsEvidenceComplete = allEvidence("rightsEvidence", "safeAreaEvidence");
+  const absentEvidenceVerdict = (complete: boolean) =>
+    complete ? "pass" : lock ? "critical" : "warn";
+
+  return {
     "Product / identity truth": {
       dimension: "Product / identity truth",
       verdict: hasCritical("productTruth")
         ? "critical"
-        : brief.mode === "lock" &&
-            (!hasPositive("productTruth") ||
-              !hasVerifiedSafetyEvidence("maskingChecked") ||
-              !hasVerifiedSafetyEvidence("integrityChecked"))
-          ? "warn"
-          : "pass",
-      repair:
-        brief.mode === "lock" &&
-        (!hasPositive("productTruth") ||
-          !hasVerifiedSafetyEvidence("maskingChecked") ||
-          !hasVerifiedSafetyEvidence("integrityChecked"))
-          ? "Verify product region, source geometry, masking, and integrity evidence."
-          : undefined,
+        : absentEvidenceVerdict(productEvidenceComplete),
+      repair: productEvidenceComplete
+        ? undefined
+        : "Attach positive, versioned product identity, segmentation, and integrity evidence before approval.",
     },
     "Brand rules & typography": {
       dimension: "Brand rules & typography",
       verdict: hasCritical("brandViolation")
         ? "critical"
-        : hasPositive("brandChecked") && hasVerifiedSafetyEvidence("ocrChecked")
-          ? "pass"
-          : "warn",
-      repair: hasCritical("brandViolation")
-        ? "Repair the brand rule violation before approval."
-        : undefined,
+        : absentEvidenceVerdict(brandEvidenceComplete),
+      repair: brandEvidenceComplete
+        ? undefined
+        : "Attach positive, versioned brand, OCR, and typography evidence before approval.",
     },
     "Message / claim correctness": {
       dimension: "Message / claim correctness",
       verdict: hasCritical("claimViolation")
         ? "critical"
-        : hasPositive("claimsChecked") && hasVerifiedSafetyEvidence("ocrChecked")
-          ? "pass"
-          : "warn",
-      repair: hasCritical("claimViolation")
-        ? "Remove or substantiate the unsupported claim."
-        : undefined,
+        : absentEvidenceVerdict(claimEvidenceComplete),
+      repair: claimEvidenceComplete
+        ? undefined
+        : "Attach positive, versioned claim and OCR evidence before approval.",
     },
     "Composition & platform fit": {
       dimension: "Composition & platform fit",
@@ -75,13 +87,13 @@ export function evaluateCreativeOutputs(
     "Technical export / rights": {
       dimension: "Technical export / rights",
       verdict:
-        formatsValid && outputs.every((output) => output.metadata?.rightsChecked !== false)
-          ? "pass"
-          : "critical",
-      repair: formatsValid
-        ? undefined
-        : "Persist a retrievable object, content hash, and rights/provenance metadata.",
+        !formatsValid || metadata.some((output) => output.rightsChecked === false)
+          ? "critical"
+          : absentEvidenceVerdict(rightsEvidenceComplete),
+      repair:
+        formatsValid && rightsEvidenceComplete
+          ? undefined
+          : "Attach retrievable output, content hash, and positive rights/provenance and safe-area evidence.",
     },
   };
-  return checks;
 }

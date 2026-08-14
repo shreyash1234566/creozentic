@@ -247,6 +247,13 @@ model Workspace {
   notifications              Notification[]
   deadLetterJobs             DeadLetterJob[]
   campaigns                  CampaignBrief[]
+  campaignAggregates         Campaign[]
+  campaignDirections         CampaignDirection[]
+  campaignFacts              CampaignFact[]
+  creativePassports          CreativePassport[]
+  revisionRequests           RevisionRequest[]
+  campaignEvents             CampaignEvent[]
+  deliveryRules              DeliveryRule[]
   templateDefinitions        TemplateDefinition[]
   creativePlans              CreativePlan[]
   approvalGates              ApprovalGate[]
@@ -274,28 +281,28 @@ model Membership {
 }
 
 model Brand {
-  id                String                 @id @default(cuid())
-  workspaceId       String
-  name              String
-  version           Int                    @default(1)
-  approvalStatus    String                 @default("DRAFT")
-  approvedBy        String?
-  approvedAt        DateTime?
-  profile           Json
-  createdAt         DateTime               @default(now())
-  updatedAt         DateTime               @updatedAt
-  workspace         Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  rules             BrandRule[]
-  assets            Asset[]
-  products          Product[]
-  dailyContentPlans DailyContentPlan[]
-  creativeRequests  CreativeRequest[]
-  autonomyPolicies  AutonomyPolicy[]
-  calendarEntries   ContentCalendarEntry[]
-  agencyWorkItems   AgencyWorkItem[]
-  outboxEvents      OutboxEvent[]
-  schedules         Schedule[]
-  campaigns         CampaignBrief[]
+  id                  String                 @id @default(cuid())
+  workspaceId         String
+  name                String
+  version             Int                    @default(1)
+  approvalStatus      String                 @default("DRAFT")
+  approvedBy          String?
+  approvedAt          DateTime?
+  profile             Json
+  createdAt           DateTime               @default(now())
+  updatedAt           DateTime               @updatedAt
+  workspace           Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  rules               BrandRule[]
+  assets              Asset[]
+  products            Product[]
+  dailyContentPlans   DailyContentPlan[]
+  creativeRequests    CreativeRequest[]
+  autonomyPolicies    AutonomyPolicy[]
+  calendarEntries     ContentCalendarEntry[]
+  agencyWorkItems     AgencyWorkItem[]
+  outboxEvents        OutboxEvent[]
+  schedules           Schedule[]
+  campaigns           CampaignBrief[]
   templateDefinitions TemplateDefinition[]
 
   @@unique([workspaceId, name])
@@ -383,28 +390,185 @@ model Product {
 }
 
 model CampaignBrief {
-  id               String    @id @default(cuid())
-  workspaceId      String
-  brandId          String?
-  name             String
-  objective        String
-  offer            Json?
-  productIds       Json
-  audience         Json?
-  legalCopy        Json?
-  channels         Json
-  status           String    @default("DRAFT")
-  version          Int       @default(1)
-  approvedBy       String?
-  approvedAt       DateTime?
-  evidence         Json?
-  createdBy        String
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
-  workspace        Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  brand            Brand?    @relation(fields: [brandId], references: [id], onDelete: SetNull)
+  id          String    @id @default(cuid())
+  workspaceId String
+  brandId     String?
+  name        String
+  objective   String
+  offer       Json?
+  productIds  Json
+  audience    Json?
+  legalCopy   Json?
+  channels    Json
+  status      String    @default("DRAFT")
+  version     Int       @default(1)
+  approvedBy  String?
+  approvedAt  DateTime?
+  evidence    Json?
+  createdBy   String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  brand       Brand?    @relation(fields: [brandId], references: [id], onDelete: SetNull)
+  campaign    Campaign?
 
   @@index([workspaceId, brandId, status, updatedAt])
+}
+
+/// Customer-facing parent for a verified creative outcome. CampaignBrief remains
+/// the original brief record; this aggregate owns the delivery/review/evidence loop.
+model Campaign {
+  id                  String             @id @default(cuid())
+  workspaceId         String
+  briefId             String             @unique
+  name                String
+  objective           String
+  status              String             @default("DRAFT")
+  lifecycleStatus     String             @default("NEEDS_INPUT")
+  briefSnapshot       Json
+  brandSnapshot       Json?
+  templateSnapshot    Json?
+  directionSnapshot   Json?
+  selectedDirectionId String?
+  costSnapshot        Json?
+  performanceSnapshot Json?
+  createdBy           String
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+  workspace           Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  brief               CampaignBrief      @relation(fields: [briefId], references: [id], onDelete: Cascade)
+  facts               CampaignFact[]
+  directions          CampaignDirection[]
+  passports           CreativePassport[]
+  revisions           RevisionRequest[]
+  events              CampaignEvent[]
+  deliveryRules       DeliveryRule[]
+  runs                WorkflowRun[]
+  reviews             ReviewTask[]
+  outputs             OutputAsset[]
+  publishJobs         PublishJob[]
+  ugcProjects         UGCProject[]
+
+  @@index([workspaceId, lifecycleStatus, updatedAt])
+}
+
+model CampaignDirection {
+  id          String    @id @default(cuid())
+  workspaceId String
+  campaignId  String
+  position    Int
+  name        String
+  route       String
+  promise     String
+  visual      String
+  copy        Json
+  formats     Json
+  status      String    @default("PROPOSED")
+  selectedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  campaign    Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@unique([campaignId, position])
+  @@index([workspaceId, campaignId, status])
+}
+
+model CampaignFact {
+  id          String    @id @default(cuid())
+  workspaceId String
+  campaignId  String
+  field       String
+  value       Json
+  source      String
+  state       String    @default("NEEDS_CONFIRMATION")
+  lockPolicy  String    @default("CONFIRM_BEFORE_USE")
+  confirmedBy String?
+  confirmedAt DateTime?
+  expiresAt   DateTime?
+  version     Int       @default(1)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  campaign    Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@unique([campaignId, field, version])
+  @@index([workspaceId, campaignId, state])
+}
+
+model CreativePassport {
+  id            String    @id @default(cuid())
+  workspaceId   String
+  campaignId    String
+  outputAssetId String?
+  status        String    @default("NEEDS_REVIEW")
+  evidence      Json
+  version       Int       @default(1)
+  computedAt    DateTime  @default(now())
+  createdAt     DateTime  @default(now())
+  workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  campaign      Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, campaignId, computedAt])
+  @@index([workspaceId, outputAssetId])
+}
+
+model RevisionRequest {
+  id                String    @id @default(cuid())
+  workspaceId       String
+  campaignId        String
+  targetAssetId     String?
+  targetFrame       String?
+  intent            String
+  scope             String
+  affectedFields    Json
+  validationImpacts Json
+  parentVersion     String
+  changePlan        Json?
+  status            String    @default("REQUESTED")
+  requestedBy       String
+  approvedBy        String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  workspace         Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  campaign          Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, campaignId, status, createdAt])
+}
+
+model CampaignEvent {
+  id          String    @id @default(cuid())
+  workspaceId String
+  campaignId  String
+  kind        String
+  message     String
+  payload     Json?
+  actorId     String?
+  createdAt   DateTime  @default(now())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  campaign    Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, campaignId, createdAt])
+}
+
+model DeliveryRule {
+  id           String    @id @default(cuid())
+  workspaceId  String
+  campaignId   String
+  what         String
+  source       Json
+  maxCostMinor Int?
+  currency     String    @default("INR")
+  approvalMode String    @default("APPROVAL")
+  schedule     Json?
+  fallback     String?
+  paused       Boolean   @default(false)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  campaign     Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, campaignId, paused])
 }
 
 model TemplateDefinition {
@@ -469,6 +633,7 @@ model WorkflowVersion {
 model WorkflowRun {
   id                String              @id @default(cuid())
   workspaceId       String
+  campaignId        String?
   workflowVersionId String
   deployedAppId     String?
   state             RunState            @default(DRAFT)
@@ -485,6 +650,7 @@ model WorkflowRun {
   createdAt         DateTime            @default(now())
   updatedAt         DateTime            @updatedAt
   workspace         Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  campaign          Campaign?           @relation(fields: [campaignId], references: [id], onDelete: SetNull)
   workflowVersion   WorkflowVersion     @relation(fields: [workflowVersionId], references: [id])
   deployedApp       DeployedApp?        @relation(fields: [deployedAppId], references: [id], onDelete: SetNull)
   nodes             NodeRun[]
@@ -525,6 +691,7 @@ model NodeRun {
 model ReviewTask {
   id            String       @id @default(cuid())
   workspaceId   String
+  campaignId    String?
   runId         String       @unique
   assigneeId    String?
   status        ReviewStatus @default(PENDING)
@@ -537,6 +704,7 @@ model ReviewTask {
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
   workspace     Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  campaign      Campaign?    @relation(fields: [campaignId], references: [id], onDelete: SetNull)
   run           WorkflowRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
   assignee      User?        @relation("ReviewAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
   comments      Comment[]
@@ -572,6 +740,7 @@ model OutputAsset {
   id                   String                @id @default(cuid())
   workspaceId          String
   runId                String
+  campaignId           String?
   assetId              String?
   name                 String
   format               String
@@ -586,6 +755,7 @@ model OutputAsset {
   updatedAt            DateTime              @updatedAt
   workspace            Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   run                  WorkflowRun           @relation(fields: [runId], references: [id], onDelete: Cascade)
+  campaign             Campaign?             @relation(fields: [campaignId], references: [id], onDelete: SetNull)
   asset                Asset?                @relation(fields: [assetId], references: [id], onDelete: SetNull)
   publishJobs          PublishJob[]
   performanceMetrics   PerformanceMetric[]
@@ -620,6 +790,7 @@ model PublishJob {
   id                 String              @id @default(cuid())
   workspaceId        String
   outputAssetId      String
+  campaignId         String?
   connectionId       String
   platform           String
   status             String              @default("draft")
@@ -635,6 +806,7 @@ model PublishJob {
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
   outputAsset        OutputAsset         @relation(fields: [outputAssetId], references: [id])
+  campaign           Campaign?           @relation(fields: [campaignId], references: [id], onDelete: SetNull)
   connection         Connection          @relation(fields: [connectionId], references: [id])
   performanceMetrics PerformanceMetric[]
 
@@ -1671,6 +1843,7 @@ model MediaAnalysis {
 model UGCProject {
   id               String    @id @default(cuid())
   workspaceId      String
+  campaignId       String?
   createdBy        String
   name             String
   status           String    @default("DRAFT")
@@ -1681,10 +1854,12 @@ model UGCProject {
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
   workspace        Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  campaign         Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
   shots            UGCShot[]
 
   @@unique([workspaceId, name])
   @@index([workspaceId, status, updatedAt])
+  @@index([workspaceId, campaignId, updatedAt])
 }
 
 model UGCShot {

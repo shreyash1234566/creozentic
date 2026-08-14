@@ -2,6 +2,8 @@ import { Prisma } from "@prisma/client";
 import { ApiError } from "./api";
 import { db } from "./db";
 import { requireRole, type RequestContext } from "./auth";
+import { providerApiError, requestProvider } from "./provider-http";
+import { requiresProductionAuthentication } from "./runtime-config";
 
 function json(value: unknown) {
   return value as Prisma.InputJsonValue;
@@ -11,6 +13,138 @@ function asStrings(value: unknown) {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
     : [];
+}
+
+function providerVerdict(value: unknown) {
+  return value === "PASS" || value === "WARN" || value === "CRITICAL" ? value : undefined;
+}
+
+/**
+ * Computes consistency from the approved reference pack and workspace assets.
+ * The public API deliberately does not accept a caller-supplied confidence or
+ * verdict for this path; those values must come from the configured vision
+ * provider and are persisted with provider/version evidence.
+ */
+export async function evaluateConsistencyCheck(
+  context: RequestContext,
+  input: {
+    referencePackId: string;
+    runId?: string;
+    outputAssetId?: string;
+    sourceAssetId?: string;
+    idempotencyKey: string;
+  },
+) {
+  requireRole(context, "EDITOR");
+  const pack = await db.referencePack.findFirst({
+    where: { id: input.referencePackId, workspaceId: context.workspaceId, status: "APPROVED" },
+  });
+  if (!pack)
+    throw new ApiError(
+      404,
+      "REFERENCE_PACK_NOT_FOUND",
+      "The approved reference pack was not found in this workspace.",
+    );
+  const referenceAssetIds = asStrings(pack.referenceAssetIds);
+  const [output, source] = await Promise.all([
+    input.outputAssetId
+      ? db.outputAsset.findFirst({
+          where: { id: input.outputAssetId, workspaceId: context.workspaceId },
+          include: { asset: true },
+        })
+      : null,
+    input.sourceAssetId
+      ? db.asset.findFirst({
+          where: { id: input.sourceAssetId, workspaceId: context.workspaceId, deletedAt: null },
+        })
+      : null,
+  ]);
+  if (input.outputAssetId && !output)
+    throw new ApiError(404, "OUTPUT_NOT_FOUND", "The consistency output was not found.");
+  if (input.sourceAssetId && !source)
+    throw new ApiError(404, "SOURCE_ASSET_NOT_FOUND", "The consistency source was not found.");
+  if (!output?.asset && !source)
+    throw new ApiError(
+      400,
+      "CONSISTENCY_OUTPUT_REQUIRED",
+      "An outputAssetId or sourceAssetId is required for visual consistency evaluation.",
+    );
+  const endpoint = process.env.INTEGRITY_PROVIDER_URL;
+  if (!endpoint)
+    throw new ApiError(
+      requiresProductionAuthentication() ? 503 : 409,
+      "CONSISTENCY_PROVIDER_NOT_CONFIGURED",
+      "A configured visual integrity provider is required to compute product consistency evidence.",
+    );
+  try {
+    const response = await requestProvider<Record<string, unknown>>({
+      provider: "visual-integrity",
+      endpoint,
+      idempotencyKey: input.idempotencyKey,
+      headers: process.env.INTELLIGENCE_PROVIDER_API_KEY
+        ? { authorization: `Bearer ${process.env.INTELLIGENCE_PROVIDER_API_KEY}` }
+        : undefined,
+      body: {
+        task: "product.consistency",
+        referenceAssetIds,
+        referenceRules: pack.identityRules,
+        outputAsset: output?.asset
+          ? {
+              id: output.asset.id,
+              objectKey: output.asset.objectKey,
+              contentHash: output.asset.contentHash,
+              mimeType: output.asset.mimeType,
+            }
+          : undefined,
+        sourceAsset: source
+          ? {
+              id: source.id,
+              objectKey: source.objectKey,
+              contentHash: source.contentHash,
+              mimeType: source.mimeType,
+            }
+          : undefined,
+      },
+    });
+    const body = response.body;
+    const confidence = Number(body.confidence);
+    if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1)
+      throw new ApiError(
+        502,
+        "CONSISTENCY_PROVIDER_INVALID",
+        "The visual integrity provider returned an invalid confidence score.",
+      );
+    const verdict = providerVerdict(body.verdict);
+    if (!verdict)
+      throw new ApiError(
+        502,
+        "CONSISTENCY_PROVIDER_INVALID",
+        "The visual integrity provider returned no usable verdict.",
+      );
+    return recordConsistencyCheck(context, {
+      referencePackId: input.referencePackId,
+      runId: input.runId,
+      outputAssetId: input.outputAssetId,
+      sourceAssetId: input.sourceAssetId,
+      confidence,
+      verdict,
+      drift: body.drift,
+      metadata: {
+        provider: body.provider ?? "visual-integrity",
+        version: body.version ?? "unknown",
+        requestId: response.requestId ?? null,
+        evidence: body.evidence ?? null,
+      },
+      idempotencyKey: input.idempotencyKey,
+    });
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw providerApiError(
+      error,
+      "CONSISTENCY_PROVIDER_FAILED",
+      "The visual integrity provider failed.",
+    );
+  }
 }
 
 export async function createReferencePack(

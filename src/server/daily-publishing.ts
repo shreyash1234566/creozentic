@@ -9,6 +9,7 @@ import { enforceSafety } from "./safety";
 import { providerApiError, requestProvider } from "./provider-http";
 import { appendCreativeEvent } from "./events";
 import { createNotifications } from "./notifications";
+import { requiresProductionAuthentication } from "./runtime-config";
 
 function json(value: unknown) {
   return value as Prisma.InputJsonValue;
@@ -75,7 +76,7 @@ export async function publishDailyPlan(
     throw new ApiError(409, "CONNECTION_UNHEALTHY", "Reconnect the destination before publishing.");
   const endpoint =
     process.env[`PUBLISH_${input.platform.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_URL`];
-  if (!endpoint && process.env.NODE_ENV === "production")
+  if (!endpoint && requiresProductionAuthentication())
     throw new ApiError(
       503,
       "PUBLISH_ADAPTER_NOT_CONFIGURED",

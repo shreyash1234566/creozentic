@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { CreativeCapability, QualityMode } from "../domain";
 import { localStorageEnabled, writeLocalObject } from "./storage";
 import { ProviderRequestError, requestProvider } from "./provider-http";
+import { isReleaseMode } from "./runtime-config";
 
 export type CreativeRequest = {
   capability: CreativeCapability;
@@ -16,6 +17,8 @@ export type CreativeRequest = {
   };
   workspaceId: string;
   idempotencyKey: string;
+  modelRef?: string;
+  brandContext?: Record<string, unknown>;
 };
 
 export type CreativeResult = {
@@ -45,6 +48,60 @@ export interface CreativeProvider {
   execute(request: CreativeRequest): Promise<CreativeResult>;
 }
 
+type ProviderConfiguration = {
+  id: string;
+  url: string;
+  apiKey?: string;
+  capabilities?: CreativeCapability[];
+  model?: string;
+  modelVersion?: string;
+  supportedRatios?: string[];
+  supportsProductLock?: boolean;
+  health?: "healthy" | "degraded" | "disabled";
+  region?: string;
+  termsUrl?: string;
+  costMinorPerOutput?: number;
+};
+
+function validateProviderEndpoint(config: ProviderConfiguration) {
+  let url: URL;
+  try {
+    url = new URL(config.url);
+  } catch {
+    throw new ProviderExecutionError(
+      `Provider ${config.id} has an invalid URL.`,
+      "configuration",
+      false,
+    );
+  }
+  if (!["http:", "https:"].includes(url.protocol))
+    throw new ProviderExecutionError(
+      `Provider ${config.id} must use HTTP(S).`,
+      "configuration",
+      false,
+    );
+  if (
+    isReleaseMode() &&
+    url.protocol !== "https" &&
+    process.env.ALLOW_INSECURE_PROVIDER_HTTP !== "true"
+  )
+    throw new ProviderExecutionError(
+      `Provider ${config.id} must use HTTPS in release mode.`,
+      "configuration",
+      false,
+    );
+  const allowlist = (process.env.PROVIDER_HOST_ALLOWLIST ?? "")
+    .split(",")
+    .map((host) => host.trim().toLowerCase())
+    .filter(Boolean);
+  if (allowlist.length && !allowlist.includes(url.hostname.toLowerCase()))
+    throw new ProviderExecutionError(
+      `Provider ${config.id} is outside PROVIDER_HOST_ALLOWLIST.`,
+      "configuration",
+      false,
+    );
+}
+
 export class ProviderExecutionError extends Error {
   constructor(
     message: string,
@@ -61,13 +118,8 @@ export class ProviderNotConfiguredError extends Error {
   }
 }
 
-function configuredProviders(): CreativeProvider[] {
-  let endpoints: Array<{
-    id: string;
-    url: string;
-    apiKey?: string;
-    capabilities?: CreativeCapability[];
-  }> = [];
+function providerConfigurations(): ProviderConfiguration[] {
+  let endpoints: ProviderConfiguration[] = [];
   if (process.env.CREATIVE_PROVIDER_ENDPOINTS) {
     try {
       endpoints = JSON.parse(process.env.CREATIVE_PROVIDER_ENDPOINTS) as typeof endpoints;
@@ -88,7 +140,12 @@ function configuredProviders(): CreativeProvider[] {
       },
     ];
   }
-  return endpoints.map((config) => new HttpCreativeProvider(config));
+  endpoints.forEach(validateProviderEndpoint);
+  return endpoints;
+}
+
+function configuredProviders(): CreativeProvider[] {
+  return providerConfigurations().map((config) => new HttpCreativeProvider(config));
 }
 
 function isCreativeResult(value: unknown): value is CreativeResult {
@@ -119,13 +176,10 @@ export class HttpCreativeProvider implements CreativeProvider {
   private readonly url: string;
   private readonly apiKey?: string;
   private readonly capabilities?: CreativeCapability[];
+  private readonly config: ProviderConfiguration;
 
-  constructor(config: {
-    id: string;
-    url: string;
-    apiKey?: string;
-    capabilities?: CreativeCapability[];
-  }) {
+  constructor(config: ProviderConfiguration) {
+    this.config = config;
     this.id = config.id;
     this.url = config.url;
     this.apiKey = config.apiKey;
@@ -133,7 +187,17 @@ export class HttpCreativeProvider implements CreativeProvider {
   }
 
   supports(request: CreativeRequest) {
-    return !this.capabilities || this.capabilities.includes(request.capability);
+    return (
+      this.config.health !== "disabled" &&
+      (!request.modelRef ||
+        request.modelRef === this.id ||
+        request.modelRef === this.config.model) &&
+      (!this.capabilities || this.capabilities.includes(request.capability)) &&
+      (!request.constraints.productLock || this.config.supportsProductLock !== false) &&
+      (!request.constraints.aspectRatio ||
+        !this.config.supportedRatios ||
+        this.config.supportedRatios.includes(request.constraints.aspectRatio))
+    );
   }
 
   async execute(request: CreativeRequest): Promise<CreativeResult> {
@@ -180,6 +244,7 @@ class LocalDeterministicProvider implements CreativeProvider {
   supports(request: CreativeRequest) {
     return (
       process.env.NODE_ENV !== "production" &&
+      !isReleaseMode() &&
       process.env.LOCAL_CREATIVE_PROVIDER_ENABLED === "true" &&
       localStorageEnabled() &&
       (request.capability === "image.generate" || request.capability === "image.edit")
@@ -252,18 +317,29 @@ function localDimensions(aspectRatio?: string) {
 }
 
 export function listConfiguredProviders() {
-  return [...configuredProviders(), new LocalDeterministicProvider()]
-    .filter((provider) =>
-      provider.supports({
-        capability: "image.generate",
-        inputAssets: [],
-        prompt: "",
-        constraints: { qualityMode: "balanced" },
-        workspaceId: "",
-        idempotencyKey: "",
-      }),
-    )
-    .map((provider) => ({ id: provider.id }));
+  const configured = providerConfigurations().map((config) => ({
+    id: config.id,
+    model: config.model ?? null,
+    modelVersion: config.modelVersion ?? null,
+    capabilities: config.capabilities ?? ["image.generate", "image.edit"],
+    health: config.health ?? "configured",
+    region: config.region ?? null,
+    supportsProductLock: config.supportsProductLock ?? null,
+    supportedRatios: config.supportedRatios ?? null,
+    termsUrl: config.termsUrl ?? null,
+    costMinorPerOutput: config.costMinorPerOutput ?? null,
+  }));
+  const local = new LocalDeterministicProvider();
+  return local.supports({
+    capability: "image.generate",
+    inputAssets: [],
+    prompt: "",
+    constraints: { qualityMode: "balanced" },
+    workspaceId: "",
+    idempotencyKey: "",
+  })
+    ? [...configured, { id: local.id, model: "local-svg", health: "development-only" }]
+    : configured;
 }
 
 export async function executeCreativeRequest(request: CreativeRequest): Promise<CreativeResult> {

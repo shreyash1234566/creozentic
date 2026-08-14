@@ -46,6 +46,17 @@ body {
   color: #fff;
 }
 
+.field-label {
+  display: block;
+  margin-bottom: 0.375rem;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.2;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-ink-soft);
+}
+
 /* Hide scrollbars until scrolling */
 * {
   scrollbar-width: none;

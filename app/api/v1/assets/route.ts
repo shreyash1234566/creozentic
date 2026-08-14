@@ -37,6 +37,20 @@ export async function GET(request: Request) {
       include: {
         brand: { select: { id: true, name: true, version: true } },
         product: { select: { id: true, sku: true, title: true } },
+        scans: {
+          select: { kind: true, status: true, scanner: true },
+          orderBy: { createdAt: "desc" },
+          take: 20,
+        },
+        outputs: {
+          select: {
+            format: true,
+            status: true,
+            campaign: { select: { id: true, name: true } },
+          },
+          orderBy: { updatedAt: "desc" },
+          take: 20,
+        },
       },
     });
     return NextResponse.json({ data: assets });

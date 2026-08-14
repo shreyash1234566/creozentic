@@ -28,6 +28,28 @@ export class ProviderRequestError extends Error {
   }
 }
 
+const sensitiveField =
+  /(?:authorization|token|secret|api[_-]?key|password|cookie|prompt|input|image|audio|video|email|phone|address)/i;
+
+function safeProviderDetails(value: unknown, depth = 0): unknown {
+  if (depth > 3) return "[truncated]";
+  if (typeof value === "string") return value.length > 240 ? "[redacted/truncated]" : value;
+  if (typeof value === "number" || typeof value === "boolean" || value === null) return value;
+  if (Array.isArray(value))
+    return value.slice(0, 10).map((item) => safeProviderDetails(item, depth + 1));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .slice(0, 25)
+        .map(([key, item]) => [
+          key,
+          sensitiveField.test(key) ? "[redacted]" : safeProviderDetails(item, depth + 1),
+        ]),
+    );
+  }
+  return undefined;
+}
+
 function integerEnv(name: string, fallback: number, min: number, max: number) {
   const value = Number(process.env[name] ?? fallback);
   return Number.isFinite(value) ? Math.min(Math.max(Math.floor(value), min), max) : fallback;
@@ -84,7 +106,7 @@ export async function requestProvider<T = Record<string, unknown>>(input: {
         body: input.body === undefined ? undefined : JSON.stringify(input.body),
         signal: controller.signal,
       });
-      const raw = await response.text();
+      const raw = (await response.text()).slice(0, 64 * 1024);
       let body: T;
       try {
         body = (raw ? JSON.parse(raw) : {}) as T;
@@ -137,7 +159,10 @@ export function providerApiError(error: unknown, code: string, fallback: string)
       provider: error.provider,
       status: error.status ?? null,
       retryable: error.retryable,
-      responseBody: error.responseBody ?? null,
+      // Provider payloads can contain prompts, PII, or provider diagnostics. Only
+      // a small redacted summary may cross the API boundary; full diagnostics stay
+      // in server-side provider logs/traces.
+      response: safeProviderDetails(error.responseBody),
     });
   }
   return new ApiError(502, code, error instanceof Error ? error.message : fallback);

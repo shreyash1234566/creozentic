@@ -41,6 +41,7 @@ export async function POST(request: Request) {
       {
         data: await createUGCProject(context, {
           name: body.name,
+          campaignId: typeof body.campaignId === "string" ? body.campaignId : undefined,
           productId: typeof body.productId === "string" ? body.productId : undefined,
           sourceAssetIds,
           audience: body.audience,

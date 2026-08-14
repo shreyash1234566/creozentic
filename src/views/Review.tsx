@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { PageHeader, Panel, Btn } from "../ui";
 import { useStore } from "../store";
-import { SAMPLE_IMAGES, img } from "../data";
+import { SAMPLE_IMAGES } from "../data";
 import type { ReviewTask as PersistedReviewTask } from "../domain";
 import ScoreCard, { DIMENSIONS, type ScoreRow, type Verdict } from "./ScoreCard";
 import {
@@ -10,8 +10,17 @@ import {
   decideServerReview,
   exportServerRun,
 } from "../client/api";
+import { createServerRevisionRequest, getServerCampaigns } from "../client/api";
+import CreativePassport from "./CreativePassport";
 
-type Comment = { id: string; author: string; text: string; region: string };
+type Comment = {
+  id: string;
+  author: string;
+  text: string;
+  region: string;
+  assetId?: string;
+  anchor?: { x?: number; y?: number; t?: number };
+};
 type Task = {
   id: string;
   runId?: string;
@@ -20,6 +29,7 @@ type Task = {
   version: string;
   kind: "static" | "video";
   images: string[];
+  outputs?: PersistedReviewTask["outputs"];
   status: "pending" | "approved" | "rejected";
   verdicts: Record<string, { verdict: Verdict; repair?: string }>;
   comments: Comment[];
@@ -99,12 +109,26 @@ export default function Review() {
   const [sel, setSel] = useState("t1");
   const [draft, setDraft] = useState("");
   const [region, setRegion] = useState("headline");
+  const [commentAssetId, setCommentAssetId] = useState("");
+  const [anchorX, setAnchorX] = useState("");
+  const [anchorY, setAnchorY] = useState("");
   const [linkCopied, setLinkCopied] = useState(false);
   const [serverError, setServerError] = useState("");
+  const [campaigns, setCampaigns] = useState<Record<string, unknown>[]>([]);
+  const [revisionScope, setRevisionScope] = useState("COPY_ONLY");
+  const [revisionIntent, setRevisionIntent] = useState("");
+  const [revisionBusy, setRevisionBusy] = useState(false);
 
   useEffect(() => {
     if (reviewTasks.length > 0) setSel(reviewTasks[0].id);
   }, [reviewTasks.length]);
+
+  useEffect(() => {
+    if (!backendEnabled) return;
+    void getServerCampaigns()
+      .then((rows) => setCampaigns(rows as Record<string, unknown>[]))
+      .catch(() => setCampaigns([]));
+  }, [backendEnabled]);
 
   const persistedTasks: Task[] = reviewTasks.map(toLocalTask);
   const allTasks = [
@@ -135,14 +159,30 @@ export default function Review() {
     repair: task.verdicts[d.dim]?.repair,
   }));
   const blocked = rows.some((r) => r.verdict === "critical");
+  const reviewCampaign = campaigns.find(
+    (campaign) =>
+      Array.isArray(campaign.runs) &&
+      campaign.runs.some((run) => {
+        const item = run as Record<string, unknown>;
+        return String(item.id) === task.runId;
+      }),
+  );
+  const campaignOutputs =
+    reviewCampaign && Array.isArray(reviewCampaign.outputs)
+      ? (reviewCampaign.outputs as Record<string, unknown>[])
+      : [];
+  const campaignBrief =
+    reviewCampaign && reviewCampaign.brief && typeof reviewCampaign.brief === "object"
+      ? (reviewCampaign.brief as Record<string, unknown>)
+      : {};
 
-  const decide = (status: Task["status"], label: string) => {
+  const decide = (status: Task["status"], label: string, approvedOutputIds?: string[]) => {
     if (isPersisted) {
       const persistedStatus = status === "pending" ? "refinement_requested" : status;
       if (backendEnabled) {
         const serverDecision =
           status === "approved" ? "approve" : status === "rejected" ? "reject" : "refine";
-        void decideServerReview(task.id, serverDecision, label)
+        void decideServerReview(task.id, serverDecision, label, approvedOutputIds)
           .then(() => refreshServerState())
           .catch((error) =>
             setServerError(
@@ -160,9 +200,20 @@ export default function Review() {
 
   const addComment = () => {
     if (!draft.trim()) return;
+    const parsedX = Number(anchorX);
+    const parsedY = Number(anchorY);
+    const anchor =
+      Number.isFinite(parsedX) && Number.isFinite(parsedY)
+        ? { x: Math.max(0, Math.min(100, parsedX)), y: Math.max(0, Math.min(100, parsedY)) }
+        : undefined;
     if (isPersisted) {
       if (backendEnabled) {
-        void addServerReviewComment(task.id, { text: draft, region })
+        void addServerReviewComment(task.id, {
+          text: draft,
+          region,
+          assetId: commentAssetId || undefined,
+          anchor,
+        })
           .then(() => refreshServerState())
           .catch((error) =>
             setServerError(
@@ -170,7 +221,13 @@ export default function Review() {
             ),
           );
       } else {
-        addReviewComment(task.id, { author: "Aarav Mehta", text: draft, region });
+        addReviewComment(task.id, {
+          author: "Aarav Mehta",
+          text: draft,
+          region,
+          assetId: commentAssetId || undefined,
+          anchor,
+        });
       }
     } else {
       setTasks((ts) =>
@@ -185,6 +242,8 @@ export default function Review() {
                     author: "Aarav Mehta",
                     text: draft,
                     region,
+                    assetId: commentAssetId || undefined,
+                    anchor,
                   },
                 ],
               }
@@ -193,6 +252,8 @@ export default function Review() {
       );
     }
     setDraft("");
+    setAnchorX("");
+    setAnchorY("");
   };
 
   const copyLink = async () => {
@@ -216,11 +277,32 @@ export default function Review() {
     setTimeout(() => setLinkCopied(false), 1800);
   };
 
+  const requestScopedRevision = async () => {
+    if (!reviewCampaign || !revisionIntent.trim()) return;
+    setRevisionBusy(true);
+    try {
+      await createServerRevisionRequest(String(reviewCampaign.id), {
+        scope: revisionScope,
+        intent: revisionIntent,
+        affectedFields:
+          revisionScope === "COPY_ONLY" ? ["headline", "caption", "cta"] : ["selected scope"],
+        parentVersion: task.version,
+      });
+      setRevisionIntent("");
+    } catch (error) {
+      setServerError(
+        error instanceof Error ? error.message : "The scoped revision could not be saved.",
+      );
+    } finally {
+      setRevisionBusy(false);
+    }
+  };
+
   return (
     <div className="space-y-8">
       <PageHeader
         kicker="P0 · Human control before publish"
-        title="Review inbox"
+        title="Review Room"
         desc="Approval is a workflow, not a hidden boolean. Comment on an asset or frame, approve/reject/refine, and every decision is timestamped and audited. A critical QA failure can never be published."
         right={
           <Btn variant="line" onClick={copyLink}>
@@ -272,14 +354,23 @@ export default function Review() {
             }
           >
             <div className="grid grid-cols-2 gap-3 p-5 sm:grid-cols-4">
-              {task.images.map((id) => (
-                <img
-                  key={id}
-                  src={img(id, 300, 375)}
-                  alt="asset under review"
-                  className="aspect-[4/5] rounded-lg object-cover"
-                />
-              ))}
+              {task.images.map((id) =>
+                /^https?:\/\//.test(id) ? (
+                  <img
+                    key={id}
+                    src={id}
+                    alt="asset under review"
+                    className="aspect-[4/5] rounded-lg object-cover"
+                  />
+                ) : (
+                  <div
+                    key={id}
+                    className="flex aspect-[4/5] items-center justify-center rounded-lg border border-dashed border-line bg-paper-deep p-3 text-center font-mono text-[10px] text-ink-soft"
+                  >
+                    Verified output preview unavailable
+                  </div>
+                ),
+              )}
             </div>
             <div className="flex flex-wrap items-center gap-2 border-t border-line px-5 py-4">
               <span className="font-mono text-[11px] text-ink-soft">
@@ -303,6 +394,28 @@ export default function Review() {
                 >
                   {task.status === "approved" ? "✓ Approved" : blocked ? "Blocked" : "Approve"}
                 </Btn>
+                {isPersisted && campaignOutputs.length > 1 && (
+                  <Btn
+                    variant="line"
+                    onClick={() =>
+                      decide(
+                        "approved",
+                        "approved all except Story",
+                        campaignOutputs
+                          .filter(
+                            (output) =>
+                              !String(output.format ?? "")
+                                .toLowerCase()
+                                .includes("story"),
+                          )
+                          .map((output) => String(output.id)),
+                      )
+                    }
+                    disabled={blocked || task.status === "approved"}
+                  >
+                    Approve all except Story
+                  </Btn>
+                )}
                 {isPersisted && task.status === "approved" && task.runId && (
                   <Btn
                     variant="line"
@@ -329,6 +442,116 @@ export default function Review() {
             </div>
           </Panel>
 
+          {reviewCampaign && (
+            <div className="grid gap-6 lg:grid-cols-2">
+              <Panel title="Review brief">
+                <div className="grid gap-3 p-5 sm:grid-cols-2">
+                  <BriefItem
+                    label="Objective"
+                    value={String(reviewCampaign.objective ?? task.title)}
+                  />
+                  <BriefItem
+                    label="Audience"
+                    value={String(
+                      (campaignBrief.audience as Record<string, unknown> | undefined)?.label ??
+                        "Workspace audience",
+                    )}
+                  />
+                  <BriefItem
+                    label="Key message"
+                    value={String(reviewCampaign.name ?? "Selected campaign direction")}
+                  />
+                  <BriefItem label="Publish date" value="Approval required before scheduling" />
+                </div>
+              </Panel>
+              <Panel title="Compare changes">
+                <div className="space-y-2 p-5 text-sm text-ink-soft">
+                  <p className="font-mono text-[10px] text-ink-soft">
+                    Click an output preview to place a comment pin. The exact output and coordinates
+                    will be stored in the review audit trail.
+                  </p>
+                  {(task.outputs ?? []).length > 0 && (
+                    <div className="grid grid-cols-2 gap-2 border-b border-line pb-3">
+                      {(task.outputs ?? []).slice(0, 4).map((output) => (
+                        <div
+                          key={output.id}
+                          className={`rounded-lg border p-2 ${
+                            commentAssetId === output.id
+                              ? "border-saffron-deep bg-paper-deep"
+                              : "border-line"
+                          }`}
+                        >
+                          <div
+                            className="relative cursor-crosshair"
+                            onClick={(event) => {
+                              const bounds = event.currentTarget.getBoundingClientRect();
+                              const x = ((event.clientX - bounds.left) / bounds.width) * 100;
+                              const y = ((event.clientY - bounds.top) / bounds.height) * 100;
+                              setCommentAssetId(output.id);
+                              setAnchorX(String(Math.round(x)));
+                              setAnchorY(String(Math.round(y)));
+                            }}
+                          >
+                            {output.downloadUrl ? (
+                              <img
+                                src={output.downloadUrl}
+                                alt={output.name}
+                                className="aspect-square w-full rounded object-cover"
+                              />
+                            ) : (
+                              <div className="flex aspect-square items-center justify-center rounded bg-paper-deep text-center font-mono text-[9px] text-ink-soft">
+                                Signed preview unavailable
+                              </div>
+                            )}
+                            {commentAssetId === output.id && anchorX && anchorY && (
+                              <span
+                                className="pointer-events-none absolute h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-saffron-deep shadow"
+                                style={{ left: `${anchorX}%`, top: `${anchorY}%` }}
+                              />
+                            )}
+                          </div>
+                          <div className="mt-1 truncate font-mono text-[9px] text-ink">
+                            {output.name}
+                          </div>
+                          <div className="font-mono text-[9px]">
+                            {output.status} · {output.format}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {campaignOutputs.length ? (
+                    campaignOutputs.slice(0, 4).map((output) => {
+                      const metadata =
+                        output.metadata && typeof output.metadata === "object"
+                          ? (output.metadata as Record<string, unknown>)
+                          : {};
+                      return (
+                        <div
+                          key={String(output.id)}
+                          className="rounded-lg border border-line px-3 py-2"
+                        >
+                          <div className="flex justify-between gap-3 text-ink">
+                            <span>{String(output.name)}</span>
+                            <span className="font-mono text-[10px]">{String(output.format)}</span>
+                          </div>
+                          <div className="mt-1 font-mono text-[10px]">
+                            {metadata.parentVersion
+                              ? `Revision from ${String(metadata.parentVersion)}`
+                              : "Original generated version"}{" "}
+                            · product, price and approved facts remain locked.
+                          </div>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <p>Output-level compare appears when the server attaches generated versions.</p>
+                  )}
+                </div>
+              </Panel>
+            </div>
+          )}
+
           <div className="grid gap-6 lg:grid-cols-2">
             <Panel title="Comments">
               <div className="p-5">
@@ -345,10 +568,16 @@ export default function Review() {
                         </span>
                       </div>
                       <p className="mt-1 text-[13px] text-ink-soft">{c.text}</p>
+                      {(c.assetId || c.anchor) && (
+                        <p className="mt-1 font-mono text-[9px] text-ink-soft">
+                          {c.assetId ? `output ${c.assetId.slice(-8)}` : "review asset"}
+                          {c.anchor ? ` · pin ${c.anchor.x ?? 0}% × ${c.anchor.y ?? 0}%` : ""}
+                        </p>
+                      )}
                     </div>
                   ))}
                 </div>
-                <div className="mt-4 flex gap-2">
+                <div className="mt-4 grid gap-2 sm:grid-cols-[auto_auto_auto_auto_1fr_auto]">
                   <select
                     value={region}
                     onChange={(e) => setRegion(e.target.value)}
@@ -358,6 +587,32 @@ export default function Review() {
                       <option key={r}>{r}</option>
                     ))}
                   </select>
+                  <select
+                    value={commentAssetId}
+                    onChange={(e) => setCommentAssetId(e.target.value)}
+                    className="rounded-lg border border-line bg-paper px-2 text-[12px] outline-none"
+                  >
+                    <option value="">Any output</option>
+                    {(task.outputs ?? []).map((output) => (
+                      <option key={output.id} value={output.id}>
+                        {output.name.slice(0, 18)}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    value={anchorX}
+                    onChange={(e) => setAnchorX(e.target.value)}
+                    placeholder="x %"
+                    inputMode="decimal"
+                    className="w-14 rounded-lg border border-line bg-paper px-2 py-2 text-[11px]"
+                  />
+                  <input
+                    value={anchorY}
+                    onChange={(e) => setAnchorY(e.target.value)}
+                    placeholder="y %"
+                    inputMode="decimal"
+                    className="w-14 rounded-lg border border-line bg-paper px-2 py-2 text-[11px]"
+                  />
                   <input
                     value={draft}
                     onChange={(e) => setDraft(e.target.value)}
@@ -376,6 +631,44 @@ export default function Review() {
               </div>
             </Panel>
           </div>
+          {reviewCampaign && (
+            <CreativePassport
+              passport={(reviewCampaign.passport as Record<string, unknown> | undefined) ?? null}
+            />
+          )}
+          {reviewCampaign && (
+            <Panel title="Revision intelligence">
+              <div className="grid gap-3 p-5 sm:grid-cols-[180px_1fr_auto]">
+                <select
+                  value={revisionScope}
+                  onChange={(event) => setRevisionScope(event.target.value)}
+                  className="rounded-lg border border-line bg-paper px-3 py-2 text-sm"
+                >
+                  <option value="COPY_ONLY">Copy only</option>
+                  <option value="LAYOUT_ONLY">Layout only</option>
+                  <option value="FORMAT_ONLY">Format only</option>
+                  <option value="VISUAL_ONLY">Visual only</option>
+                  <option value="FACT_CHANGE">Fact change</option>
+                </select>
+                <input
+                  value={revisionIntent}
+                  onChange={(event) => setRevisionIntent(event.target.value)}
+                  placeholder="Change only this…"
+                  className="rounded-lg border border-line bg-paper px-3 py-2 text-sm"
+                />
+                <Btn
+                  onClick={() => void requestScopedRevision()}
+                  disabled={revisionBusy || !revisionIntent.trim()}
+                >
+                  {revisionBusy ? "Saving…" : "Save scope"}
+                </Btn>
+              </div>
+              <p className="px-5 pb-4 font-mono text-[10px] text-ink-soft">
+                Locked product, price, and approved evidence stay protected; the change plan will
+                re-run only the affected checks.
+              </p>
+            </Panel>
+          )}
         </div>
       </div>
 
@@ -397,6 +690,7 @@ function toLocalTask(task: PersistedReviewTask): Task {
     version: task.version,
     kind: task.kind,
     images: task.images,
+    outputs: task.outputs,
     status:
       task.status === "approved" ? "approved" : task.status === "rejected" ? "rejected" : "pending",
     verdicts: Object.fromEntries(
@@ -410,6 +704,8 @@ function toLocalTask(task: PersistedReviewTask): Task {
       author: comment.author,
       text: comment.text,
       region: comment.region,
+      assetId: comment.assetId,
+      anchor: comment.anchor,
     })),
     requiredRoles: task.requiredRoles,
   };
@@ -438,5 +734,14 @@ function AuditLog() {
         ))}
       </div>
     </Panel>
+  );
+}
+
+function BriefItem({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-soft">{label}</div>
+      <div className="mt-1 text-sm">{value}</div>
+    </div>
   );
 }

@@ -7,6 +7,7 @@ import { db } from "./db";
 import { readLocalObject, localStorageEnabled } from "./storage";
 import type { RequestContext } from "./auth";
 import { providerApiError, requestProvider } from "./provider-http";
+import { isReleaseMode } from "./runtime-config";
 
 const execFileAsync = promisify(execFile);
 
@@ -18,6 +19,15 @@ function record(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+}
+
+function scanStatus(value: unknown, fallback: "PASSED" | "REVIEW" | "PENDING") {
+  const candidate = typeof value === "string" ? value.trim().toUpperCase() : "";
+  return ["PASSED", "FAILED", "REVIEW", "PENDING", "UNAVAILABLE", "REQUIRES_PROVIDER"].includes(
+    candidate,
+  )
+    ? candidate
+    : fallback;
 }
 
 function ffprobePath() {
@@ -98,7 +108,7 @@ async function scanAsset(
   });
   if (!asset)
     throw new ApiError(404, "ASSET_NOT_FOUND", "The asset was not found in this workspace.");
-  const key = `${asset.id}:${asset.contentHash}:${kind}:v1`;
+  const key = `${asset.id}:${asset.contentHash}:${kind}:v2`;
   const existing = await db.assetScan.findUnique({
     where: {
       workspaceId_idempotencyKey: { workspaceId: context.workspaceId, idempotencyKey: key },
@@ -122,7 +132,7 @@ async function scanAsset(
       });
       result = provider
         ? {
-            status: String(provider.status ?? "PENDING"),
+            status: scanStatus(provider.status, "PENDING"),
             scanner: String(provider.scanner ?? "configured-malware-provider"),
             version: String(provider.version ?? "1"),
             details: provider,
@@ -148,7 +158,7 @@ async function scanAsset(
     });
     result = provider
       ? {
-          status: "PASSED",
+          status: scanStatus(provider.status, "REVIEW"),
           scanner: String(provider.provider ?? "configured-ocr-provider"),
           version: String(provider.version ?? "1"),
           details: provider,
@@ -169,7 +179,7 @@ async function scanAsset(
     });
     result = provider
       ? {
-          status: "PASSED",
+          status: scanStatus(provider.status, "REVIEW"),
           scanner: String(provider.provider ?? "configured-masking-provider"),
           version: String(provider.version ?? "1"),
           details: provider,
@@ -194,18 +204,21 @@ async function scanAsset(
       mimeType: asset.mimeType,
       contentHash: exactHash,
     });
+    const expectedHash = asset.contentHash.startsWith("sha256:")
+      ? asset.contentHash
+      : `sha256:${asset.contentHash}`;
     result = provider
       ? {
-          status: String(provider.status ?? "REVIEW"),
+          status: scanStatus(provider.status, "REVIEW"),
           scanner: String(provider.provider ?? "configured-integrity-provider"),
           version: String(provider.version ?? "1"),
           details: { ...provider, exactHash },
         }
       : {
-          status: exactHash === asset.contentHash ? "PASSED" : "FAILED",
+          status: exactHash === expectedHash ? "PASSED" : "FAILED",
           scanner: "local-content-hash",
           version: "1",
-          details: { exactHash, expectedHash: asset.contentHash, semanticCheck: "NOT_AVAILABLE" },
+          details: { exactHash, expectedHash, semanticCheck: "NOT_AVAILABLE" },
         };
   }
   return db.assetScan.create({
@@ -240,8 +253,8 @@ export async function runAssetGate(context: RequestContext, assetId: string) {
   const blocked = scans.some(
     (scan) =>
       scan!.status === "FAILED" ||
-      (process.env.NODE_ENV === "production" &&
-        ["UNAVAILABLE", "REQUIRES_PROVIDER"].includes(scan!.status)),
+      ((isReleaseMode() || process.env.NODE_ENV === "production") &&
+        ["UNAVAILABLE", "REQUIRES_PROVIDER", "REVIEW", "PENDING"].includes(scan!.status)),
   );
   if (blocked) {
     await db.asset.update({

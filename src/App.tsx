@@ -23,36 +23,142 @@ import Checklist from "./views/Checklist";
 import Governance from "./views/Governance";
 import Landing from "./views/Landing";
 import DailyAutopilot from "./views/DailyAutopilot";
+import Campaigns from "./views/Campaigns";
+import CreateCampaign from "./views/CreateCampaign";
 
-type NavItem = { id: string; label: string; glyph: string; group?: string };
+type Role =
+  | "OWNER"
+  | "ADMIN"
+  | "STRATEGIST"
+  | "EDITOR"
+  | "REVIEWER"
+  | "CLIENT"
+  | "PUBLISHER"
+  | "BILLING"
+  | "VIEWER";
+type NavItem = {
+  id: string;
+  label: string;
+  glyph: string;
+  group?: string;
+  minRole?: Role;
+  advanced?: boolean;
+};
 
 const NAV: NavItem[] = [
-  { id: "overview", label: "Overview", glyph: "◧" },
-  { id: "daily", label: "Daily Autopilot", glyph: "◉", group: "Create" },
-  { id: "productlock", label: "Product-Lock Studio", glyph: "◈", group: "Create" },
-  { id: "assets", label: "Asset library", glyph: "▤" },
-  { id: "brand", label: "Brand memory", glyph: "❖" },
-  { id: "workflow", label: "Workflow canvas", glyph: "⑂" },
-  { id: "batch", label: "Batch generation", glyph: "▦" },
-  { id: "composer", label: "Composer", glyph: "⊞" },
-  { id: "video", label: "Video Studio", glyph: "▷" },
-  { id: "localization", label: "Localization", glyph: "⟐" },
-  { id: "consistency", label: "Consistency", glyph: "⊚" },
-  { id: "models", label: "Model studio", glyph: "✦" },
-  { id: "review", label: "Review inbox", glyph: "⊛", group: "Control" },
-  { id: "connectors", label: "Connectors", glyph: "⇄" },
-  { id: "scheduler", label: "Scheduled runs", glyph: "◷" },
-  { id: "performance", label: "Performance", glyph: "◭" },
-  { id: "marketplace", label: "Marketplace", glyph: "◇", group: "Grow" },
-  { id: "governance", label: "Governance & enterprise", glyph: "⌘" },
-  { id: "billing", label: "Credits & teams", glyph: "❑" },
-  { id: "checklist", label: "Feature checklist", glyph: "☑" },
+  { id: "overview", label: "Home", glyph: "◧" },
+  { id: "create", label: "Create", glyph: "+", group: "Work" },
+  { id: "campaigns", label: "Campaigns", glyph: "▱", group: "Work" },
+  { id: "daily", label: "Daily Content Desk", glyph: "◉", group: "Work" },
+  { id: "productlock", label: "Product Ad", glyph: "◈", group: "Work" },
+  { id: "review", label: "Review Room", glyph: "⊛", group: "Control" },
+  {
+    id: "scheduler",
+    label: "Calendar & Publish",
+    glyph: "◷",
+    group: "Control",
+    minRole: "PUBLISHER",
+  },
+  { id: "assets", label: "Library", glyph: "▤", group: "Control" },
+  { id: "brand", label: "Brand Brain", glyph: "❖", group: "Control" },
+  { id: "performance", label: "Results", glyph: "◭", group: "Control" },
+  { id: "connectors", label: "Automation", glyph: "⇄", group: "Control", minRole: "EDITOR" },
+  {
+    id: "composer",
+    label: "Safe Editor",
+    glyph: "⊞",
+    group: "Advanced Studio",
+    minRole: "EDITOR",
+    advanced: true,
+  },
+  {
+    id: "video",
+    label: "UGC Ad Studio",
+    glyph: "▷",
+    group: "Advanced Studio",
+    minRole: "EDITOR",
+    advanced: true,
+  },
+  {
+    id: "batch",
+    label: "Catalogue Preflight",
+    glyph: "▦",
+    group: "Advanced Studio",
+    minRole: "EDITOR",
+    advanced: true,
+  },
+  {
+    id: "localization",
+    label: "Localized Packs",
+    glyph: "⟐",
+    group: "Advanced Studio",
+    minRole: "EDITOR",
+    advanced: true,
+  },
+  {
+    id: "consistency",
+    label: "Consistency",
+    glyph: "⊚",
+    group: "Advanced Studio",
+    minRole: "REVIEWER",
+    advanced: true,
+  },
+  {
+    id: "workflow",
+    label: "Automation Builder",
+    glyph: "⑂",
+    group: "Advanced Studio",
+    minRole: "STRATEGIST",
+    advanced: true,
+  },
+  {
+    id: "models",
+    label: "Model Comparison",
+    glyph: "✦",
+    group: "Advanced Studio",
+    minRole: "STRATEGIST",
+    advanced: true,
+  },
+  {
+    id: "marketplace",
+    label: "Industry Recipes",
+    glyph: "◇",
+    group: "Advanced Studio",
+    minRole: "STRATEGIST",
+    advanced: true,
+  },
+  {
+    id: "governance",
+    label: "Settings & Control",
+    glyph: "⌘",
+    group: "Settings",
+    minRole: "ADMIN",
+  },
+  { id: "billing", label: "Billing & Teams", glyph: "❑", group: "Settings", minRole: "BILLING" },
+  { id: "checklist", label: "Product Ops", glyph: "☑", group: "Settings", minRole: "ADMIN" },
 ];
+
+const ROLE_RANK: Record<Role, number> = {
+  VIEWER: 1,
+  CLIENT: 1,
+  REVIEWER: 2,
+  EDITOR: 3,
+  STRATEGIST: 3,
+  PUBLISHER: 4,
+  BILLING: 4,
+  ADMIN: 4,
+  OWNER: 5,
+};
 
 function Shell({ initialView, onHome }: { initialView: string; onHome: () => void }) {
   const [view, setView] = useState(initialView);
   const [mobileOpen, setMobileOpen] = useState(false);
-  const { credits, brand } = useStore();
+  const { credits, brand, backendEnabled, role } = useStore();
+  const nav = NAV.filter(
+    (item) =>
+      (!item.minRole || ROLE_RANK[role] >= ROLE_RANK[item.minRole]) &&
+      (!item.advanced || role !== "OWNER"),
+  );
 
   const go = (v: string) => {
     setView(v);
@@ -64,6 +170,10 @@ function Shell({ initialView, onHome }: { initialView: string; onHome: () => voi
     switch (view) {
       case "daily":
         return <DailyAutopilot />;
+      case "create":
+        return <CreateCampaign go={go} />;
+      case "campaigns":
+        return <Campaigns go={go} />;
       case "productlock":
         return <ProductLock />;
       case "assets":
@@ -132,7 +242,7 @@ function Shell({ initialView, onHome }: { initialView: string; onHome: () => voi
           </button>
 
           <nav className="flex-1 overflow-y-auto px-3 py-4">
-            {NAV.map((item) => (
+            {nav.map((item) => (
               <div key={item.id}>
                 {item.group && (
                   <div className="px-3 pb-1.5 pt-4 font-mono text-[9px] uppercase tracking-[0.2em] text-ink-soft/70">
@@ -192,9 +302,18 @@ function Shell({ initialView, onHome }: { initialView: string; onHome: () => voi
             ☰ Menu
           </button>
           <div className="hidden font-mono text-[11px] uppercase tracking-[0.14em] text-ink-soft lg:block">
-            {NAV.find((n) => n.id === view)?.label}
+            {nav.find((n) => n.id === view)?.label}
           </div>
           <div className="flex items-center gap-3">
+            <span
+              className={`hidden rounded-full border px-2.5 py-1 font-mono text-[9px] uppercase tracking-[0.12em] sm:block ${
+                backendEnabled
+                  ? "border-leaf/40 bg-leaf/10 text-leaf"
+                  : "border-marigold/50 bg-marigold/10 text-ink"
+              }`}
+            >
+              {backendEnabled ? "Live backend" : "Demo mode"}
+            </span>
             <span className="hidden font-mono text-[11px] text-ink-soft sm:block">
               {brand.name}
             </span>
@@ -203,6 +322,12 @@ function Shell({ initialView, onHome }: { initialView: string; onHome: () => voi
             </span>
           </div>
         </header>
+
+        {!backendEnabled && (
+          <div className="border-b border-marigold/30 bg-marigold/10 px-5 py-2 text-center font-mono text-[10px] uppercase tracking-[0.12em] text-ink-soft lg:px-10">
+            Demo mode · changes stay in this browser and do not represent production workspace data
+          </div>
+        )}
 
         <main className="flex-1 px-5 py-8 lg:px-10 lg:py-10">
           <div className="mx-auto max-w-6xl">{render()}</div>

@@ -8,6 +8,8 @@ import {
   getServerDailyPlans,
   getServerDailyPlan,
   getServerAgencyMetrics,
+  getServerAgencyQueue,
+  updateServerAgencyItem,
   getServerCalendar,
   generateServerCalendar,
   reviseServerDailyPlan,
@@ -42,6 +44,8 @@ export default function DailyAutopilot() {
   const [error, setError] = useState("");
   const [calendar, setCalendar] = useState<AnyRecord[]>([]);
   const [agency, setAgency] = useState<Record<string, number> | null>(null);
+  const [agencyQueue, setAgencyQueue] = useState<AnyRecord[]>([]);
+  const [agencyBrandFilter, setAgencyBrandFilter] = useState("");
 
   const load = async () => {
     if (!backendEnabled) return;
@@ -49,12 +53,14 @@ export default function DailyAutopilot() {
     try {
       const result = await getServerDailyPlans();
       setPlans(result);
-      const [calendarResult, agencyResult] = await Promise.all([
+      const [calendarResult, agencyResult, queueResult] = await Promise.all([
         getServerCalendar(planDate),
         getServerAgencyMetrics(),
+        getServerAgencyQueue(agencyBrandFilter ? { brandId: agencyBrandFilter } : undefined),
       ]);
       setCalendar(calendarResult);
       setAgency(agencyResult);
+      setAgencyQueue(queueResult);
       if (selected) {
         const refreshed = await getServerDailyPlan(String(selected.id));
         setSelected(refreshed);
@@ -66,7 +72,7 @@ export default function DailyAutopilot() {
 
   useEffect(() => {
     void load();
-  }, [backendEnabled]);
+  }, [backendEnabled, agencyBrandFilter]);
 
   const generateWeek = async () => {
     setBusy("calendar");
@@ -222,11 +228,34 @@ export default function DailyAutopilot() {
     }
   };
 
+  const updateAgencyItem = async (
+    itemId: string,
+    input: {
+      status?: string;
+      deadline?: string;
+      revenueMinor?: number;
+      providerSpendMinor?: number;
+    },
+  ) => {
+    setBusy("agency:" + itemId);
+    setError("");
+    try {
+      const updated = await updateServerAgencyItem(itemId, input);
+      setAgencyQueue((current) =>
+        current.map((item) => (String(item.id) === itemId ? { ...item, ...updated } : item)),
+      );
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Agency work item could not be updated.");
+    } finally {
+      setBusy("");
+    }
+  };
+
   return (
     <div className="space-y-8">
       <PageHeader
-        kicker="Daily Creative Autopilot · durable workflow"
-        title="Brief to approved creative, every day"
+        kicker="Daily Content Desk · durable workflow"
+        title="Your daily review queue"
         desc="Calendar, brand truth, product evidence, deterministic composition, QA, approval, delivery and learning in one recoverable run. New workspaces start in Approval mode."
         right={<PhaseTag phase={`${pendingCount} awaiting approval`} />}
       />
@@ -286,6 +315,138 @@ export default function DailyAutopilot() {
                   <div className="mt-2 font-display text-2xl">{value}</div>
                 </div>
               ))}
+            </div>
+            <div className="border-t border-line p-4">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <span className="font-mono text-[10px] uppercase tracking-wide text-ink-soft">
+                  Client / campaign queue
+                </span>
+                <div className="flex items-center gap-2">
+                  <select
+                    value={agencyBrandFilter}
+                    onChange={(event) => setAgencyBrandFilter(event.target.value)}
+                    className="rounded border border-line bg-paper px-2 py-1 font-mono text-[10px]"
+                  >
+                    <option value="">All client workspaces</option>
+                    {[
+                      ...new Map(
+                        agencyQueue.map((item) => [
+                          String(item.brandId ?? item.clientName ?? ""),
+                          String(item.clientName ?? "Client"),
+                        ]),
+                      ),
+                    ].map(([id, name]) => (
+                      <option key={id} value={id}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="font-mono text-[10px] text-ink-soft">
+                    {agencyQueue.length} tracked
+                  </span>
+                </div>
+              </div>
+              <div className="space-y-2">
+                {agencyQueue.slice(0, 6).map((item) => (
+                  <div key={String(item.id)} className="rounded-lg border border-line px-3 py-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="truncate text-sm">
+                        {String(item.clientName ?? "Client")} · {String(item.title)}
+                      </span>
+                      <PhaseTag phase={String(item.status).replace(/_/g, " ")} />
+                    </div>
+                    <div className="mt-1 flex justify-between gap-3 font-mono text-[9px] text-ink-soft">
+                      <span>
+                        {item.deadline
+                          ? `deadline ${String(item.deadline).slice(0, 10)}`
+                          : "no deadline"}
+                      </span>
+                      <span>
+                        {item.turnaroundHours == null
+                          ? "in progress"
+                          : `${String(item.turnaroundHours)}h turnaround`}
+                      </span>
+                    </div>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-5">
+                      <select
+                        value={String(item.status ?? "INTERNAL_REVIEW")}
+                        disabled={busy === "agency:" + String(item.id)}
+                        onChange={(event) =>
+                          void updateAgencyItem(String(item.id), { status: event.target.value })
+                        }
+                        className="rounded border border-line bg-paper px-2 py-1 font-mono text-[10px]"
+                      >
+                        {[
+                          "BLOCKED",
+                          "INTERNAL_REVIEW",
+                          "CLIENT_REVIEW",
+                          "APPROVED_PUBLISH",
+                          "DELIVERED",
+                        ].map((status) => (
+                          <option key={status} value={status}>
+                            {status.replace(/_/g, " ")}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="date"
+                        value={item.deadline ? String(item.deadline).slice(0, 10) : ""}
+                        onChange={(event) =>
+                          void updateAgencyItem(String(item.id), {
+                            deadline: event.target.value
+                              ? new Date(event.target.value + "T18:00:00").toISOString()
+                              : undefined,
+                          })
+                        }
+                        className="rounded border border-line bg-paper px-2 py-1 font-mono text-[10px]"
+                      />
+                      <input
+                        type="number"
+                        min={0}
+                        defaultValue={(Number(item.revenueMinor ?? 0) / 100).toFixed(0)}
+                        onBlur={(event) =>
+                          void updateAgencyItem(String(item.id), {
+                            revenueMinor: Math.max(
+                              0,
+                              Math.round(Number(event.target.value || 0) * 100),
+                            ),
+                          })
+                        }
+                        placeholder="Revenue ₹"
+                        className="rounded border border-line bg-paper px-2 py-1 font-mono text-[10px]"
+                      />
+                      <input
+                        type="number"
+                        min={0}
+                        defaultValue={(Number(item.providerSpendMinor ?? 0) / 100).toFixed(0)}
+                        onBlur={(event) =>
+                          void updateAgencyItem(String(item.id), {
+                            providerSpendMinor: Math.max(
+                              0,
+                              Math.round(Number(event.target.value || 0) * 100),
+                            ),
+                          })
+                        }
+                        placeholder="Spend ₹"
+                        className="rounded border border-line bg-paper px-2 py-1 font-mono text-[10px]"
+                      />
+                      <div className="rounded border border-line px-2 py-1 font-mono text-[10px] text-ink-soft">
+                        Margin ₹
+                        {(
+                          Number(item.marginMinor ?? 0) / 100 ||
+                          (Number(item.revenueMinor ?? 0) - Number(item.providerSpendMinor ?? 0)) /
+                            100
+                        ).toFixed(0)}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                {agencyQueue.length === 0 && (
+                  <p className="font-mono text-[10px] text-ink-soft">
+                    Agency work items appear after the first daily plan is created.
+                  </p>
+                )}
+              </div>
             </div>
           </Panel>
         </div>
@@ -438,7 +599,7 @@ export default function DailyAutopilot() {
                   </div>
                   {failures.slice(0, 4).map((failure) => (
                     <div key={String(failure.id)} className="mt-2 text-sm text-ink-soft">
-                      {String(failure.node)} · {String(failure.customerImpact)}
+                      {String(failure.customerImpact)}
                     </div>
                   ))}
                 </div>

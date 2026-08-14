@@ -11,6 +11,7 @@ async function getQueue() {
       const [{ Queue }, RedisModule] = await Promise.all([import("bullmq"), import("ioredis")]);
       const Redis = RedisModule.default;
       const connection = new Redis(process.env.REDIS_URL!, { maxRetriesPerRequest: null });
+      connection.on("error", () => undefined);
       return new Queue<WorkflowJob>("creozentic-workflow-runs", { connection });
     })();
   }

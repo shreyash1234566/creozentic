@@ -8,7 +8,9 @@ export async function checkQueueReadiness() {
     maxRetriesPerRequest: 1,
     enableOfflineQueue: false,
     connectTimeout: 1500,
+    retryStrategy: () => null,
   });
+  client.on("error", () => undefined);
   try {
     await client.connect();
     await client.ping();

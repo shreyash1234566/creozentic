@@ -5,6 +5,7 @@ import { db } from "./db";
 import { requireRole, type RequestContext } from "./auth";
 import { providerApiError, requestProvider } from "./provider-http";
 import { createMediaJob } from "./media-jobs";
+import { isReleaseMode } from "./runtime-config";
 
 export const LOCALE_PROFILES = {
   "hi-IN": { label: "Hindi", script: "Devanagari", direction: "ltr", currency: "INR" },
@@ -49,6 +50,7 @@ async function translate(input: {
   const endpoint = process.env.TEXT_PROVIDER_URL;
   if (
     !endpoint &&
+    !isReleaseMode() &&
     process.env.NODE_ENV !== "production" &&
     process.env.LOCAL_TEXT_PROVIDER_ENABLED === "true"
   ) {

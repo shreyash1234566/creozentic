@@ -48,6 +48,28 @@ function selectedBranch(config: Record<string, unknown>, state: RuntimeState) {
   return value ? "truthy" : "falsey";
 }
 
+function graphEdges(graph: unknown) {
+  if (!graph || typeof graph !== "object" || Array.isArray(graph)) return [];
+  const edges = (graph as Record<string, unknown>).edges;
+  return Array.isArray(edges)
+    ? edges.filter((edge): edge is Record<string, unknown> =>
+        Boolean(edge && typeof edge === "object" && !Array.isArray(edge)),
+      )
+    : [];
+}
+
+/** A conditional edge runs only when its source condition produced the declared branch. */
+export function shouldRunWorkflowNode(graph: unknown, nodeId: string, state: RuntimeState) {
+  for (const edge of graphEdges(graph)) {
+    if (edge.to !== nodeId) continue;
+    const branch = typeof edge.branch === "string" ? edge.branch : edge.when;
+    if (typeof branch !== "string") continue;
+    const source = record(record(state.nodes)[String(edge.from)]);
+    if (source.branch !== branch) return false;
+  }
+  return true;
+}
+
 async function executeTextNode(
   node: WorkflowNodePlan,
   state: RuntimeState,
@@ -174,6 +196,15 @@ export async function executeWorkflowPreparation(input: {
     ].includes(node.type),
   );
   for (const node of preparation) {
+    if (!shouldRunWorkflowNode(input.graph, node.id, state)) {
+      const output = { skipped: true, reason: "conditional branch not selected" };
+      (state.nodes as Record<string, unknown>)[node.id] = output;
+      await db.nodeRun.updateMany({
+        where: { runId: input.runId, nodeKey: node.id },
+        data: { state: NodeState.SUCCEEDED, outputRefs: json(output), completedAt: new Date() },
+      });
+      continue;
+    }
     await db.nodeRun.updateMany({
       where: { runId: input.runId, nodeKey: node.id },
       data: { state: NodeState.RUNNING, attempts: { increment: 1 }, startedAt: new Date() },

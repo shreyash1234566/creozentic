@@ -7,6 +7,7 @@ import { renderLocally } from "./local-renderer";
 import { providerApiError, requestProvider } from "./provider-http";
 import { enforceWorkspaceSpendCap } from "./spending";
 import { runAssetGate } from "./asset-intelligence";
+import { requiresProductionAuthentication } from "./runtime-config";
 
 type RenderOutput = {
   assetId?: unknown;
@@ -134,7 +135,7 @@ async function validateCompositionConfig(
     },
   });
   if (!template) {
-    if (process.env.NODE_ENV === "production")
+    if (requiresProductionAuthentication())
       throw new ApiError(
         409,
         "APPROVED_TEMPLATE_REQUIRED",
@@ -265,6 +266,7 @@ export async function createMediaJob(
     "video.merge",
     "captions.render",
     "audio.mix",
+    "audio.generate",
     "upscale",
     "video.lipsync",
   ]);
@@ -275,7 +277,7 @@ export async function createMediaJob(
       "The requested media job kind is not supported.",
     );
   const sourceAssetIds = [...new Set(input.sourceAssetIds.filter(Boolean))];
-  if (sourceAssetIds.length === 0)
+  if (sourceAssetIds.length === 0 && input.kind !== "audio.generate")
     throw new ApiError(400, "MEDIA_SOURCE_REQUIRED", "At least one source asset is required.");
   const assets = await db.asset.findMany({
     where: { workspaceId: context.workspaceId, id: { in: sourceAssetIds }, deletedAt: null },
@@ -357,6 +359,34 @@ export async function createMediaJob(
         "No active likeness or voice consent exists for this media job.",
       );
   }
+  if (
+    input.kind === "audio.generate" &&
+    (input.config.voiceClone === true || typeof input.config.voiceId === "string")
+  ) {
+    const consentSubject =
+      typeof input.config.consentSubject === "string" ? input.config.consentSubject : "";
+    if (!consentSubject || input.config.disclosure !== true)
+      throw new ApiError(
+        409,
+        "CONSENT_AND_DISCLOSURE_REQUIRED",
+        "Voice generation requires an active consentSubject and disclosure=true.",
+      );
+    const consent = await db.consentRecord.findFirst({
+      where: {
+        workspaceId: context.workspaceId,
+        subject: consentSubject,
+        revokedAt: null,
+        OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+      },
+      select: { id: true },
+    });
+    if (!consent)
+      throw new ApiError(
+        409,
+        "CONSENT_REQUIRED",
+        "No active voice consent exists for this audio job.",
+      );
+  }
   const existing = await db.mediaJob.findUnique({
     where: {
       workspaceId_idempotencyKey: {
@@ -429,7 +459,21 @@ export async function createMediaJob(
   if (!job) throw new ApiError(500, "MEDIA_JOB_NOT_CREATED", "The media job could not be created.");
   const endpoint = rendererEndpoint();
   if (!endpoint) {
-    if (process.env.NODE_ENV === "production") {
+    if (input.kind === "audio.generate") {
+      const failed = await releaseReservation(
+        context.workspaceId,
+        job.id,
+        "MEDIA_RENDERER_URL must be configured for generated audio.",
+        "AUDIO_GENERATION_NOT_CONFIGURED",
+      );
+      throw new ApiError(
+        503,
+        "AUDIO_GENERATION_NOT_CONFIGURED",
+        "Generated voice/audio requires a configured media provider.",
+        { jobId: failed.id },
+      );
+    }
+    if (requiresProductionAuthentication()) {
       const failed = await releaseReservation(
         context.workspaceId,
         job.id,

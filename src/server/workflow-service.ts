@@ -127,6 +127,8 @@ function parseBrief(input: unknown): ProductLockBrief {
     : [];
   if (outputFormats.length === 0)
     throw new ApiError(400, "INVALID_BRIEF", "At least one output format is required.");
+  const optionalText = (field: string) =>
+    typeof value[field] === "string" && value[field].trim() ? value[field].trim() : undefined;
   return {
     product: requiredText(value.product, "product"),
     sku: requiredText(value.sku, "sku"),
@@ -138,6 +140,14 @@ function parseBrief(input: unknown): ProductLockBrief {
     audience: requiredText(value.audience, "audience"),
     language: requiredText(value.language, "language"),
     cta: requiredText(value.cta, "cta"),
+    headline: optionalText("headline"),
+    body: optionalText("body"),
+    altText: optionalText("altText"),
+    campaignId: optionalText("campaignId"),
+    directionId: optionalText("directionId"),
+    hashtags: Array.isArray(value.hashtags)
+      ? value.hashtags.filter((item): item is string => typeof item === "string")
+      : undefined,
   };
 }
 
@@ -156,6 +166,7 @@ async function getWorkspaceBrand(tx: DbClient, workspaceId: string) {
   const brand = await tx.brand.findFirst({
     where: { workspaceId, approvalStatus: "APPROVED" },
     orderBy: { updatedAt: "desc" },
+    include: { rules: { orderBy: { createdAt: "desc" }, take: 100 } },
   });
   if (!brand)
     throw new ApiError(404, "BRAND_NOT_FOUND", "Create a brand profile before starting a run.");
@@ -237,6 +248,40 @@ export async function createRun(
             include: { assets: { where: { deletedAt: null }, select: { id: true, status: true } } },
           }),
         ]);
+        const creativeNodes = workflowNodePlan(workflowVersion.graph).filter((node) =>
+          ["image_generation", "image_edit", "model_comparison"].includes(node.type),
+        );
+        const generationNodeCount = creativeNodes.filter((node) =>
+          ["image_generation", "image_edit"].includes(node.type),
+        ).length;
+        const comparisonAttemptCount = creativeNodes
+          .filter((node) => node.type === "model_comparison")
+          .reduce((total, node) => {
+            const refs = Array.isArray(node.config.modelRefs)
+              ? node.config.modelRefs.filter((ref) => typeof ref === "string" && ref.trim())
+              : [];
+            return total + Math.max(refs.length, 2);
+          }, 0);
+        const creativeAttemptCount = generationNodeCount + comparisonAttemptCount;
+        if (!creativeAttemptCount)
+          throw new ApiError(
+            409,
+            "WORKFLOW_GENERATION_NODE_REQUIRED",
+            "The published workflow has no executable image generation, edit, or model comparison node.",
+          );
+        const runQuote = {
+          ...quote,
+          credits: quote.credits * creativeAttemptCount,
+          providerCostMinor: quote.providerCostMinor * creativeAttemptCount,
+          outputCount: quote.outputCount * creativeAttemptCount,
+          warnings:
+            creativeAttemptCount > 1
+              ? [
+                  ...quote.warnings,
+                  `${creativeAttemptCount} image-model attempts will run independently and are reserved separately.`,
+                ]
+              : quote.warnings,
+        };
         if (!product)
           throw new ApiError(
             404,
@@ -268,14 +313,14 @@ export async function createRun(
             "CREDIT_ACCOUNT_NOT_READY",
             "The workspace credit account is not configured.",
           );
-        if (quote.credits > account.balance - account.reserved) {
+        if (runQuote.credits > account.balance - account.reserved) {
           throw new ApiError(
             402,
             "INSUFFICIENT_CREDITS",
-            `This run needs ${quote.credits} credits, but only ${account.balance - account.reserved} are available.`,
+            `This run needs ${runQuote.credits} credits, but only ${account.balance - account.reserved} are available.`,
           );
         }
-        await enforceWorkspaceSpendCap(context.workspaceId, quote.credits, tx);
+        await enforceWorkspaceSpendCap(context.workspaceId, runQuote.credits, tx);
 
         const created = await tx.workflowRun.create({
           data: {
@@ -291,6 +336,13 @@ export async function createRun(
               name: brand.name,
               version: brand.version,
               profile: brand.profile,
+              rules: brand.rules.map((rule) => ({
+                id: rule.id,
+                type: rule.type,
+                value: rule.value,
+                severity: rule.severity,
+                version: rule.version,
+              })),
             }),
             productSnapshot: json({
               id: product.id,
@@ -308,9 +360,9 @@ export async function createRun(
               sourceAssetIds,
               sourceAssets,
             }),
-            quoteSnapshot: json({ ...quote, route: quote.route }),
-            warnings: json(quote.warnings),
-            reservedUnits: quote.credits,
+            quoteSnapshot: json({ ...runQuote, route: runQuote.route }),
+            warnings: json(runQuote.warnings),
+            reservedUnits: runQuote.credits,
             nodes: {
               create: workflowNodePlan(workflowVersion.graph).map((node) => ({
                 nodeKey: node.id,
@@ -326,13 +378,13 @@ export async function createRun(
           data: {
             workspaceId: context.workspaceId,
             runId: created.id,
-            amount: quote.credits,
+            amount: runQuote.credits,
             status: ReservationStatus.RESERVED,
           },
         });
         await tx.creditAccount.update({
           where: { workspaceId: context.workspaceId },
-          data: { reserved: { increment: quote.credits } },
+          data: { reserved: { increment: runQuote.credits } },
         });
         await tx.ledgerEntry.create({
           data: {
@@ -340,7 +392,7 @@ export async function createRun(
             reservationId: reservation.id,
             runId: created.id,
             kind: LedgerKind.RESERVE,
-            amount: quote.credits,
+            amount: runQuote.credits,
             reason: `Reserved for ${created.title}`,
             idempotencyKey: `${input.idempotencyKey}:reserve`,
           },
@@ -360,7 +412,7 @@ export async function createRun(
           eventType: "credits.reserved",
           correlationId: context.correlationId,
           idempotencyKey: `${input.idempotencyKey}:credits.reserved`,
-          payload: { runId: created.id, credits: quote.credits },
+          payload: { runId: created.id, credits: runQuote.credits },
         });
         await addEvent(tx, {
           workspaceId: context.workspaceId,
@@ -378,7 +430,7 @@ export async function createRun(
           targetId: created.id,
           correlationId: context.correlationId,
           idempotencyKey: input.idempotencyKey,
-          metadata: { title: created.title, credits: quote.credits },
+          metadata: { title: created.title, credits: runQuote.credits },
         });
         return { run: created, deduplicated: false };
       },
@@ -971,7 +1023,11 @@ export async function failRunInternal(input: {
 export async function decideReview(
   context: RequestContext,
   reviewId: string,
-  input: { decision: "approve" | "reject" | "refine"; reason?: string },
+  input: {
+    decision: "approve" | "reject" | "refine";
+    reason?: string;
+    approvedOutputIds?: string[];
+  },
 ) {
   requireRole(context, "REVIEWER");
   return db.$transaction(async (tx) => {
@@ -993,6 +1049,23 @@ export async function decideReview(
         "QUALITY_GATE_BLOCKED",
         "A critical quality check must be repaired before approval.",
       );
+    if (input.decision === "approve" && review.run.campaignId) {
+      const passport = await tx.creativePassport.findFirst({
+        where: {
+          workspaceId: context.workspaceId,
+          campaignId: review.run.campaignId,
+          outputAssetId: null,
+        },
+        orderBy: { computedAt: "desc" },
+      });
+      if (!passport || passport.status !== "READY")
+        throw new ApiError(
+          409,
+          "CREATIVE_PASSPORT_BLOCKED",
+          "The Creative Passport must be ready before this campaign output can be approved.",
+          { passportId: passport?.id ?? null, status: passport?.status ?? "MISSING" },
+        );
+    }
     const nextStatus =
       input.decision === "approve"
         ? ReviewStatus.APPROVED
@@ -1019,11 +1092,32 @@ export async function decideReview(
       where: { id: review.runId },
       data: { state: nextRunState },
     });
-    if (input.decision === "approve")
-      await tx.outputAsset.updateMany({
+    if (input.decision === "approve") {
+      const outputs = await tx.outputAsset.findMany({
         where: { runId: review.runId, workspaceId: context.workspaceId },
+        select: { id: true },
+      });
+      const approvedIds = input.approvedOutputIds?.length
+        ? new Set(input.approvedOutputIds)
+        : new Set(outputs.map((output) => output.id));
+      await tx.outputAsset.updateMany({
+        where: {
+          runId: review.runId,
+          workspaceId: context.workspaceId,
+          id: { in: [...approvedIds] },
+        },
         data: { status: OutputStatus.APPROVED, approvedAt: now() },
       });
+      if (input.approvedOutputIds?.length)
+        await tx.outputAsset.updateMany({
+          where: {
+            runId: review.runId,
+            workspaceId: context.workspaceId,
+            id: { notIn: [...approvedIds] },
+          },
+          data: { status: OutputStatus.REJECTED },
+        });
+    }
     const controlKeys = workflowReviewAndExportKeys(review.run.workflowVersion.graph);
     if (controlKeys.review.length)
       await tx.nodeRun.updateMany({
@@ -1050,7 +1144,7 @@ export async function decideReview(
       targetType: "review_task",
       targetId: review.id,
       correlationId: context.correlationId,
-      metadata: { reason: input.reason },
+      metadata: { reason: input.reason, approvedOutputIds: input.approvedOutputIds ?? null },
     });
     return { review: updatedReview, run: updatedRun };
   });
@@ -1061,7 +1155,7 @@ export async function exportRun(context: RequestContext, runId: string) {
   return db.$transaction(async (tx) => {
     const run = await tx.workflowRun.findFirst({
       where: { id: runId, workspaceId: context.workspaceId },
-      include: { reviewTask: true, outputs: true },
+      include: { reviewTask: true, outputs: true, workflowVersion: true },
     });
     if (!run)
       throw new ApiError(404, "RUN_NOT_FOUND", "The workflow run was not found in this workspace.");
@@ -1072,6 +1166,16 @@ export async function exportRun(context: RequestContext, runId: string) {
       where: { runId, workspaceId: context.workspaceId },
       data: { status: OutputStatus.EXPORTED },
     });
+    const exportNodes = workflowReviewAndExportKeys(run.workflowVersion.graph).export;
+    if (exportNodes.length)
+      await tx.nodeRun.updateMany({
+        where: { runId, nodeKey: { in: exportNodes } },
+        data: {
+          state: NodeState.SUCCEEDED,
+          outputRefs: { exportedOutputIds: run.outputs.map((output) => output.id) },
+          completedAt: now(),
+        },
+      });
     const updated = await tx.workflowRun.update({
       where: { id: runId },
       data: { state: RunState.EXPORTED },
@@ -1098,58 +1202,72 @@ export async function exportRun(context: RequestContext, runId: string) {
 }
 
 export async function getWorkspaceState(context: RequestContext) {
-  const [workspace, brand, runs, reviews, account, ledger, assets, products] = await Promise.all([
-    db.workspace.findFirst({
-      where: { id: context.workspaceId, status: "ACTIVE" },
-      select: { id: true, name: true, slug: true, plan: true, region: true },
-    }),
-    db.brand.findFirst({
-      where: { workspaceId: context.workspaceId, approvalStatus: "APPROVED" },
-      orderBy: { updatedAt: "desc" },
-    }),
-    listRuns(context),
-    db.reviewTask.findMany({
-      where: { workspaceId: context.workspaceId },
-      orderBy: { createdAt: "desc" },
-      take: 100,
-      include: { comments: true },
-    }),
-    db.creditAccount.findUnique({ where: { workspaceId: context.workspaceId } }),
-    db.ledgerEntry.findMany({
-      where: { workspaceId: context.workspaceId },
-      orderBy: { createdAt: "desc" },
-      take: 100,
-    }),
-    db.asset.findMany({
-      where: { workspaceId: context.workspaceId, deletedAt: null },
-      orderBy: { createdAt: "desc" },
-      take: 200,
-      select: {
-        id: true,
-        name: true,
-        type: true,
-        status: true,
-        mimeType: true,
-        objectKey: true,
-        productId: true,
-        contentHash: true,
-      },
-    }),
-    db.product.findMany({
-      where: { workspaceId: context.workspaceId, deletedAt: null },
-      orderBy: { updatedAt: "desc" },
-      take: 200,
-      select: {
-        id: true,
-        sku: true,
-        title: true,
-        sourceAssetIds: true,
-        lockMode: true,
-        brandId: true,
-      },
-    }),
-  ]);
+  const [workspace, brand, runs, reviewRows, account, ledger, assets, products] = await Promise.all(
+    [
+      db.workspace.findFirst({
+        where: { id: context.workspaceId, status: "ACTIVE" },
+        select: { id: true, name: true, slug: true, plan: true, region: true },
+      }),
+      db.brand.findFirst({
+        where: { workspaceId: context.workspaceId, approvalStatus: "APPROVED" },
+        orderBy: { updatedAt: "desc" },
+      }),
+      listRuns(context),
+      db.reviewTask.findMany({
+        where: { workspaceId: context.workspaceId },
+        orderBy: { createdAt: "desc" },
+        take: 100,
+        include: { comments: true },
+      }),
+      db.creditAccount.findUnique({ where: { workspaceId: context.workspaceId } }),
+      db.ledgerEntry.findMany({
+        where: { workspaceId: context.workspaceId },
+        orderBy: { createdAt: "desc" },
+        take: 100,
+      }),
+      db.asset.findMany({
+        where: { workspaceId: context.workspaceId, deletedAt: null },
+        orderBy: { createdAt: "desc" },
+        take: 200,
+        select: {
+          id: true,
+          name: true,
+          type: true,
+          status: true,
+          mimeType: true,
+          objectKey: true,
+          productId: true,
+          contentHash: true,
+        },
+      }),
+      db.product.findMany({
+        where: { workspaceId: context.workspaceId, deletedAt: null },
+        orderBy: { updatedAt: "desc" },
+        take: 200,
+        select: {
+          id: true,
+          sku: true,
+          title: true,
+          sourceAssetIds: true,
+          lockMode: true,
+          brandId: true,
+        },
+      }),
+    ],
+  );
   if (!workspace)
     throw new ApiError(404, "WORKSPACE_NOT_FOUND", "The workspace was not found or is inactive.");
-  return { workspace, brand, runs, reviews, credits: account, ledger, assets, products };
+  return {
+    workspace: { ...workspace, role: context.role },
+    brand,
+    runs,
+    reviews: reviewRows.map((review) => ({
+      ...review,
+      outputs: runs.find((run) => run.id === review.runId)?.outputs ?? [],
+    })),
+    credits: account,
+    ledger,
+    assets,
+    products,
+  };
 }

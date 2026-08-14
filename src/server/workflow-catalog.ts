@@ -10,6 +10,7 @@ const allowedNodeTypes = new Set([
   "prompt_template",
   "image_generation",
   "image_edit",
+  "model_comparison",
   "text_generation",
   "condition",
   "split",

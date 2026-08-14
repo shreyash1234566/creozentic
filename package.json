@@ -25,19 +25,19 @@
     "bullmq": "^6.0.11",
     "ioredis": "^6.0.0",
     "motion": "^13.1.0",
-    "next": "latest",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
+    "next": "16.3.0",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "latest",
+    "@tailwindcss/postcss": "4.2.1",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "oxfmt": "^0.63.0",
     "prisma": "^6.19.0",
-    "tailwindcss": "^4.0.0",
+    "tailwindcss": "4.2.1",
     "tsx": "^4.23.12",
     "typescript": "^5.7.0"
   }

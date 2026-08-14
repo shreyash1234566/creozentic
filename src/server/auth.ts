@@ -3,6 +3,7 @@ import { MembershipRole, MembershipStatus } from "@prisma/client";
 import { db } from "./db";
 import { ApiError } from "./api";
 import { enforceRateLimit } from "./rate-limit";
+import { requiresProductionAuthentication } from "./runtime-config";
 
 export type RequestContext = {
   workspaceId: string;
@@ -66,6 +67,23 @@ function sessionTokenFromCookie(request: Request) {
   return value ? decodeURIComponent(value.slice(cookieName.length + 1)) : undefined;
 }
 
+/** Authenticates user-scoped endpoints that do not yet have a workspace path. */
+export function authenticatedUserId(request: Request) {
+  const isProduction = requiresProductionAuthentication();
+  const bearer =
+    request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ??
+    sessionTokenFromCookie(request);
+  const session =
+    bearer && process.env.AUTH_SESSION_SECRET
+      ? verifySessionToken(bearer, process.env.AUTH_SESSION_SECRET)
+      : null;
+  const userId =
+    session?.sub ??
+    (!isProduction ? (request.headers.get("x-user-id") ?? process.env.DEMO_USER_ID) : undefined);
+  if (!userId) throw new ApiError(401, "AUTH_REQUIRED", "A valid bearer session is required.");
+  return userId;
+}
+
 export function createSessionToken(
   claims: { userId: string; workspaceId: string; expiresInSeconds?: number },
   secret = process.env.AUTH_SESSION_SECRET,
@@ -105,7 +123,7 @@ async function identityFromApiKey(request: Request, workspaceId: string) {
 }
 
 export async function getRequestContext(request: Request): Promise<RequestContext> {
-  const isProduction = process.env.NODE_ENV === "production";
+  const isProduction = requiresProductionAuthentication();
   const headerWorkspaceId = request.headers.get("x-workspace-id");
   const bearer =
     request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ??

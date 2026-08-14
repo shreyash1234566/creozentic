@@ -1,13 +1,22 @@
 import { createHash } from "node:crypto";
-import { Prisma } from "@prisma/client";
+import {
+  LedgerKind,
+  OutputStatus,
+  Prisma,
+  ReservationStatus,
+  ReviewStatus,
+  RunState,
+} from "@prisma/client";
 import { ApiError } from "./api";
 import { db } from "./db";
 import { requireRole, type RequestContext } from "./auth";
 import { executeCreativeRequest } from "./gateway";
 import { createDownloadUrl, isWorkspaceObjectKey, verifyUploadedObject } from "./storage";
-import { analyzeMediaAsset } from "./asset-intelligence";
+import { analyzeMediaAsset, runAssetGate } from "./asset-intelligence";
 import { createMediaJob } from "./media-jobs";
 import { providerApiError, requestProvider } from "./provider-http";
+import { requiresProductionAuthentication } from "./runtime-config";
+import { enforceWorkspaceSpendCap } from "./spending";
 
 function json(value: unknown) {
   return value as Prisma.InputJsonValue;
@@ -24,6 +33,104 @@ function strings(value: unknown) {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string" && Boolean(item.trim()))
     : [];
+}
+
+async function reserveComparisonAttempt(
+  context: RequestContext,
+  comparisonId: string,
+  modelRef: string,
+) {
+  return db.$transaction(
+    async (tx) => {
+      const idempotencyKey = `comparison:${comparisonId}:${modelRef}:reserve`;
+      const existing = await tx.ledgerEntry.findUnique({
+        where: { workspaceId_idempotencyKey: { workspaceId: context.workspaceId, idempotencyKey } },
+      });
+      if (existing) return existing.reservationId;
+      const account = await tx.creditAccount.findUnique({
+        where: { workspaceId: context.workspaceId },
+      });
+      if (!account || account.balance - account.reserved < 1)
+        throw new ApiError(
+          402,
+          "INSUFFICIENT_CREDITS",
+          "Each model comparison attempt requires one credit.",
+        );
+      await enforceWorkspaceSpendCap(context.workspaceId, 1, tx);
+      const reservation = await tx.creditReservation.create({
+        data: { workspaceId: context.workspaceId, amount: 1, status: ReservationStatus.RESERVED },
+      });
+      await tx.creditAccount.update({
+        where: { workspaceId: context.workspaceId },
+        data: { reserved: { increment: 1 } },
+      });
+      await tx.ledgerEntry.create({
+        data: {
+          workspaceId: context.workspaceId,
+          reservationId: reservation.id,
+          kind: LedgerKind.RESERVE,
+          amount: 1,
+          reason: `Reserved for model comparison ${comparisonId}:${modelRef}`,
+          idempotencyKey,
+          metadata: json({ comparisonId, modelRef }),
+        },
+      });
+      return reservation.id;
+    },
+    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+  );
+}
+
+async function settleComparisonAttempt(
+  workspaceId: string,
+  reservationId: string | null,
+  comparisonId: string,
+  modelRef: string,
+  succeeded: boolean,
+) {
+  if (!reservationId) return;
+  await db.$transaction(async (tx) => {
+    const reservation = await tx.creditReservation.findUnique({ where: { id: reservationId } });
+    if (!reservation || reservation.status !== ReservationStatus.RESERVED) return;
+    const consumed = succeeded ? 1 : 0;
+    await tx.creditReservation.update({
+      where: { id: reservation.id },
+      data: {
+        status: succeeded ? ReservationStatus.SETTLED : ReservationStatus.RELEASED,
+        settledAt: new Date(),
+      },
+    });
+    await tx.creditAccount.update({
+      where: { workspaceId },
+      data: {
+        reserved: { decrement: reservation.amount },
+        ...(consumed ? { balance: { decrement: consumed } } : {}),
+      },
+    });
+    if (consumed) {
+      await tx.ledgerEntry.create({
+        data: {
+          workspaceId,
+          reservationId: reservation.id,
+          kind: LedgerKind.CONSUME,
+          amount: -consumed,
+          reason: `Settled model comparison ${comparisonId}:${modelRef}`,
+          idempotencyKey: `comparison:${comparisonId}:${modelRef}:consume`,
+        },
+      });
+    } else {
+      await tx.ledgerEntry.create({
+        data: {
+          workspaceId,
+          reservationId: reservation.id,
+          kind: LedgerKind.RELEASE,
+          amount: 0,
+          reason: `Released failed model comparison ${comparisonId}:${modelRef}`,
+          idempotencyKey: `comparison:${comparisonId}:${modelRef}:release`,
+        },
+      });
+    }
+  });
 }
 
 export async function createModelComparison(
@@ -53,16 +160,6 @@ export async function createModelComparison(
     include: { outputs: true },
   });
   if (existing) return { comparison: existing, deduplicated: true };
-  const comparison = await db.modelComparison.create({
-    data: {
-      workspaceId: context.workspaceId,
-      createdBy: context.userId,
-      prompt: input.prompt.trim(),
-      constraints: json(input.constraints ?? {}),
-      status: "RUNNING",
-      idempotencyKey: input.idempotencyKey,
-    },
-  });
   const inputAssetIds = [...new Set(input.inputAssetIds ?? [])];
   const assets = inputAssetIds.length
     ? await db.asset.findMany({
@@ -76,6 +173,17 @@ export async function createModelComparison(
       "COMPARISON_ASSET_NOT_FOUND",
       "Every comparison input asset must belong to this workspace.",
     );
+  await Promise.all(inputAssetIds.map((assetId) => runAssetGate(context, assetId)));
+  const comparison = await db.modelComparison.create({
+    data: {
+      workspaceId: context.workspaceId,
+      createdBy: context.userId,
+      prompt: input.prompt.trim(),
+      constraints: json(input.constraints ?? {}),
+      status: "RUNNING",
+      idempotencyKey: input.idempotencyKey,
+    },
+  });
   const outputRows = await Promise.all(
     modelRefs.map(async (modelRef) => {
       const row = await db.modelComparisonOutput.create({
@@ -87,7 +195,9 @@ export async function createModelComparison(
           status: "RUNNING",
         },
       });
+      let reservationId: string | null = null;
       try {
+        reservationId = await reserveComparisonAttempt(context, comparison.id, modelRef);
         const result = await executeCreativeRequest({
           capability: "image.generate",
           inputAssets: inputAssetIds,
@@ -96,10 +206,10 @@ export async function createModelComparison(
             qualityMode: "balanced",
             outputCount: 1,
             ...(input.constraints ?? {}),
-            modelRef,
-          } as any,
+          },
           workspaceId: context.workspaceId,
           idempotencyKey: `${input.idempotencyKey}:${modelRef}`,
+          modelRef,
         });
         const output = result.outputs[0];
         if (
@@ -152,6 +262,38 @@ export async function createModelComparison(
           },
         });
         const signed = await createDownloadUrl({ objectKey: asset.objectKey, expiresIn: 900 });
+        const providerCallId =
+          result.providerRequestId ?? `${comparison.id}:${modelRef}:${result.provider}`;
+        await db.providerCost.upsert({
+          where: {
+            workspaceId_providerCallId: {
+              workspaceId: context.workspaceId,
+              providerCallId,
+            },
+          },
+          create: {
+            workspaceId: context.workspaceId,
+            provider: result.provider,
+            model: result.model || modelRef,
+            modelVersion: result.modelVersion,
+            providerCallId,
+            rawUsage: result.usage,
+            costMinor: result.usage.providerCostMinor,
+            currency: result.usage.currency,
+          },
+          update: {
+            rawUsage: result.usage,
+            costMinor: result.usage.providerCostMinor,
+            currency: result.usage.currency,
+          },
+        });
+        await settleComparisonAttempt(
+          context.workspaceId,
+          reservationId,
+          comparison.id,
+          modelRef,
+          true,
+        );
         return db.modelComparisonOutput.update({
           where: { id: row.id },
           data: {
@@ -172,6 +314,13 @@ export async function createModelComparison(
           },
         });
       } catch (error) {
+        await settleComparisonAttempt(
+          context.workspaceId,
+          reservationId,
+          comparison.id,
+          modelRef,
+          false,
+        );
         return db.modelComparisonOutput.update({
           where: { id: row.id },
           data: {
@@ -259,6 +408,7 @@ export async function createUGCProject(
   context: RequestContext,
   input: {
     name: string;
+    campaignId?: string;
     productId?: string;
     sourceAssetIds: string[];
     audience: string;
@@ -276,6 +426,14 @@ export async function createUGCProject(
   requireRole(context, "EDITOR");
   const name = text(input.name);
   if (!name) throw new ApiError(400, "UGC_NAME_REQUIRED", "A UGC project name is required.");
+  const campaign = input.campaignId
+    ? await db.campaign.findFirst({
+        where: { id: input.campaignId, workspaceId: context.workspaceId },
+        select: { id: true },
+      })
+    : null;
+  if (input.campaignId && !campaign)
+    throw new ApiError(404, "CAMPAIGN_NOT_FOUND", "The selected campaign was not found.");
   const sourceAssetIds = [...new Set(input.sourceAssetIds.filter(Boolean))];
   const assets = sourceAssetIds.length
     ? await db.asset.findMany({
@@ -347,10 +505,11 @@ export async function createUGCProject(
   const project = await db.uGCProject.create({
     data: {
       workspaceId: context.workspaceId,
+      campaignId: campaign?.id,
       createdBy: context.userId,
       name,
       status: "PLANNED",
-      brief: json({ ...input, sourceAssetIds }),
+      brief: json({ ...input, campaignId: campaign?.id ?? null, sourceAssetIds }),
       plan: json(plan),
       disclosure: json({ required: true, text: plan.disclosure }),
       shots: {
@@ -369,6 +528,21 @@ export async function createUGCProject(
     },
     include: { shots: { orderBy: { sequence: "asc" } } },
   });
+  if (campaign?.id)
+    await db.campaignEvent.create({
+      data: {
+        workspaceId: context.workspaceId,
+        campaignId: campaign.id,
+        kind: "UGC_PROJECT_CREATED",
+        message: "Proof-first UGC project created with campaign source and consent requirements.",
+        actorId: context.userId,
+        payload: json({
+          projectId: project.id,
+          sourceAssetIds,
+          consentSubject: input.consentSubject ?? null,
+        }),
+      },
+    });
   return project;
 }
 
@@ -564,6 +738,237 @@ export async function updateUGCShot(
   });
 }
 
+function buildUGCQualityScores(input: {
+  project: { shots: Array<{ status: string; script: string }> };
+  sourceAssetIds: string[];
+  captions: string[];
+  outputAssetIds: string[];
+  consentSubject?: string;
+  syntheticAvatar: boolean;
+  missingCapabilities: string[];
+  disclosure: Record<string, unknown>;
+}) {
+  const shotsLocked =
+    input.project.shots.length > 0 && input.project.shots.every((shot) => shot.status === "LOCKED");
+  const captionsReady =
+    input.captions.length >= input.project.shots.length &&
+    input.captions.every((caption) => caption.trim().length > 0);
+  const disclosureReady = Boolean(
+    input.disclosure.required !== false && text(input.disclosure.text),
+  );
+  const likenessRightsReady = !input.syntheticAvatar || Boolean(input.consentSubject);
+  const analysisReady = input.missingCapabilities.length === 0;
+  const outputReady = input.outputAssetIds.length > 0;
+  const verdict = (passed: boolean, warning = false, repair?: string) => ({
+    verdict: passed ? "pass" : warning ? "warn" : "critical",
+    ...(repair ? { repair } : {}),
+  });
+  return {
+    "Product / identity truth": verdict(
+      input.sourceAssetIds.length > 0,
+      false,
+      "Attach verified source footage and product proof.",
+    ),
+    "Brand rules & typography": verdict(true),
+    "Message / claim correctness": verdict(
+      captionsReady,
+      false,
+      "Complete every shot caption from approved campaign copy.",
+    ),
+    "Composition & platform fit": verdict(
+      shotsLocked,
+      false,
+      "Lock every planned shot before rendering.",
+    ),
+    "Temporal / audio quality": analysisReady
+      ? verdict(outputReady, false, "A rendered output is required for temporal QA.")
+      : verdict(
+          false,
+          true,
+          `Media analysis is incomplete: ${input.missingCapabilities.join(", ")}.`,
+        ),
+    "Distinctiveness / authenticity": verdict(true),
+    "Technical export / rights":
+      likenessRightsReady && disclosureReady
+        ? verdict(outputReady, false, "A rendered output is required for export evidence.")
+        : verdict(
+            false,
+            false,
+            "Verify likeness consent and record the required disclosure before export.",
+          ),
+  };
+}
+
+async function attachUGCOutputsToReview(input: {
+  context: RequestContext;
+  project: Awaited<ReturnType<typeof getUGCProject>>;
+  outputAssetIds: string[];
+  analyzed: Awaited<ReturnType<typeof analyzeUGCProject>>;
+  editPlan: Record<string, unknown>;
+}) {
+  if (!input.project.campaignId)
+    throw new ApiError(
+      409,
+      "UGC_CAMPAIGN_REQUIRED",
+      "UGC production must be attached to a campaign before review artifacts can be created.",
+    );
+  const campaignId = input.project.campaignId;
+  const run = await db.workflowRun.findFirst({
+    where: {
+      workspaceId: input.context.workspaceId,
+      campaignId,
+      state: { notIn: [RunState.CANCELLED, RunState.TERMINAL_FAILURE] },
+    },
+    orderBy: { updatedAt: "desc" },
+    select: { id: true, title: true },
+  });
+  if (!run)
+    throw new ApiError(
+      409,
+      "UGC_REVIEW_CONTEXT_REQUIRED",
+      "Create a campaign creative run before rendering UGC so the output can enter the approval queue.",
+    );
+  const assets = await db.asset.findMany({
+    where: {
+      workspaceId: input.context.workspaceId,
+      id: { in: input.outputAssetIds },
+      deletedAt: null,
+    },
+    select: { id: true, mimeType: true, name: true, metadata: true },
+  });
+  if (assets.length !== input.outputAssetIds.length)
+    throw new ApiError(
+      409,
+      "UGC_OUTPUT_NOT_READY",
+      "The renderer returned an output that is not available as a workspace asset.",
+    );
+  const brief = object(input.project.brief);
+  const disclosure = object(input.project.disclosure);
+  const captions = Array.isArray(input.editPlan.captions)
+    ? input.editPlan.captions.filter((value): value is string => typeof value === "string")
+    : [];
+  const syntheticAvatar = input.editPlan.syntheticAvatar === true;
+  const consentSubject = text(brief.consentSubject) || undefined;
+  const qualityScores = buildUGCQualityScores({
+    project: input.project,
+    sourceAssetIds: strings(input.editPlan.sourceAssetIds),
+    captions,
+    outputAssetIds: input.outputAssetIds,
+    consentSubject,
+    syntheticAvatar,
+    missingCapabilities: input.analyzed.missingCapabilities,
+    disclosure,
+  });
+  const evidence = {
+    serverComputed: true,
+    pipeline: "real_footage_first",
+    projectId: input.project.id,
+    campaignId,
+    sourceAssetIds: strings(input.editPlan.sourceAssetIds),
+    analysisIds: input.analyzed.analysis.map((item) => item.id),
+    capabilities: input.analyzed.capabilities,
+    disclosure,
+    consentSubject: consentSubject ?? null,
+    syntheticAvatar,
+    editPlan: input.editPlan,
+  };
+  const rows = await db.$transaction(async (tx) => {
+    const existing = await tx.outputAsset.findMany({
+      where: { workspaceId: input.context.workspaceId, runId: run.id, campaignId },
+      select: { id: true, assetId: true, metadata: true },
+    });
+    const created = [] as Array<Record<string, unknown>>;
+    for (const [index, asset] of assets.entries()) {
+      const matching = existing.find(
+        (row) => row.assetId === asset.id && object(row.metadata).ugcProjectId === input.project.id,
+      );
+      const data = {
+        workspaceId: input.context.workspaceId,
+        runId: run.id,
+        campaignId,
+        assetId: asset.id,
+        name: `${input.project.name} · version ${index + 1}`,
+        format: asset.mimeType,
+        locale:
+          text(
+            object(input.project.plan).objective &&
+              object(object(input.project.plan).objective).language,
+          ) || null,
+        status: OutputStatus.DRAFT,
+        qualityScores: json(qualityScores),
+        metadata: json({
+          ...evidence,
+          ugcProjectId: input.project.id,
+          sourceAsset: asset.name,
+          sourceMetadata: object(asset.metadata),
+          outputIndex: index,
+        }),
+      };
+      const row = matching
+        ? await tx.outputAsset.update({
+            where: { id: matching.id },
+            data,
+            select: { id: true, assetId: true, status: true, qualityScores: true, metadata: true },
+          })
+        : await tx.outputAsset.create({
+            data,
+            select: { id: true, assetId: true, status: true, qualityScores: true, metadata: true },
+          });
+      created.push(row as Record<string, unknown>);
+    }
+    const review = await tx.reviewTask.upsert({
+      where: { runId: run.id },
+      update: {
+        workspaceId: input.context.workspaceId,
+        campaignId,
+        title: `${input.project.name} · UGC approval`,
+        kind: "ugc",
+        status: ReviewStatus.PENDING,
+        decision: Prisma.JsonNull,
+        verdicts: json(qualityScores),
+      },
+      create: {
+        workspaceId: input.context.workspaceId,
+        campaignId,
+        runId: run.id,
+        title: `${input.project.name} · UGC approval`,
+        kind: "ugc",
+        requiredRoles: json(["EDITOR", "REVIEWER"]),
+        verdicts: json(qualityScores),
+      },
+    });
+    await tx.workflowRun.update({
+      where: { id: run.id },
+      data: {
+        state: RunState.AWAITING_REVIEW,
+        warnings: json(
+          Object.values(qualityScores).some((item) => item.verdict === "critical")
+            ? ["UGC quality evidence contains a blocking result."]
+            : [],
+        ),
+      },
+    });
+    await tx.campaignEvent.create({
+      data: {
+        workspaceId: input.context.workspaceId,
+        campaignId,
+        kind: "UGC_REVIEW_REQUESTED",
+        message:
+          "UGC outputs were attached to the campaign review queue with server-computed QA evidence.",
+        actorId: input.context.userId,
+        payload: json({
+          projectId: input.project.id,
+          runId: run.id,
+          reviewTaskId: review.id,
+          outputAssetIds: created.map((row) => row.id),
+        }),
+      },
+    });
+    return { review, outputs: created };
+  });
+  return { runId: run.id, reviewTaskId: rows.review.id, outputs: rows.outputs, qualityScores };
+}
+
 export async function renderUGCProject(
   context: RequestContext,
   projectId: string,
@@ -573,6 +978,7 @@ export async function renderUGCProject(
     bRollAssetIds?: string[];
     musicAssetId?: string;
     voiceAssetId?: string;
+    coverShotId?: string;
     outputDurationsSec?: number[];
     consentSubject?: string;
     syntheticAvatar?: boolean;
@@ -584,7 +990,7 @@ export async function renderUGCProject(
     sourceAssetIds: input.sourceAssetIds,
   });
   const project = analyzed.project;
-  if (process.env.NODE_ENV === "production" && analyzed.missingCapabilities.length)
+  if (requiresProductionAuthentication() && analyzed.missingCapabilities.length)
     throw new ApiError(
       409,
       "UGC_ANALYSIS_INCOMPLETE",
@@ -645,6 +1051,7 @@ export async function renderUGCProject(
   const editPlan = {
     schemaVersion: 1,
     sourceOfTruth: "real_footage_first",
+    sourceAssetIds: sources,
     shots: project.shots.map((shot) => ({
       id: shot.id,
       kind: shot.kind,
@@ -655,6 +1062,7 @@ export async function renderUGCProject(
       preserveUnrelatedCuts: true,
     })),
     bRollAssetIds,
+    coverShotId: input.coverShotId ?? project.shots[0]?.id ?? null,
     captions: input.captions ?? project.shots.map((shot) => shot.script),
     outputDurationsSec: requestedDurations.length ? requestedDurations : [30],
     disclosure: object(project.disclosure),
@@ -672,7 +1080,23 @@ export async function renderUGCProject(
           idempotencyKey: `${input.idempotencyKey}:merge`,
         })
       : null;
-  const captionSources = merge ? strings(merge.job.outputAssetIds) : sources;
+  const mergedSources = merge ? strings(merge.job.outputAssetIds) : sources;
+  const lipSync = input.syntheticAvatar
+    ? await createMediaJob(context, {
+        kind: "video.lipsync",
+        sourceAssetIds: mergedSources,
+        config: {
+          projectId,
+          consentSubject: subject,
+          voiceAssetId: input.voiceAssetId,
+          editPlan,
+          disclosure: object(project.disclosure),
+          analysisIds: analyzed.analysis.map((item) => item.id),
+        },
+        idempotencyKey: `${input.idempotencyKey}:lipsync`,
+      })
+    : null;
+  const captionSources = lipSync ? strings(lipSync.job.outputAssetIds) : mergedSources;
   const result = await createMediaJob(context, {
     kind: "captions.render",
     sourceAssetIds: captionSources,
@@ -708,17 +1132,44 @@ export async function renderUGCProject(
         })
       : null;
   const outputIds = mixed ? strings(mixed.job.outputAssetIds) : captionAssetIds;
+  await Promise.all(outputIds.map((assetId) => runAssetGate(context, assetId)));
+  const reviewArtifacts = await attachUGCOutputsToReview({
+    context,
+    project,
+    outputAssetIds: outputIds,
+    analyzed,
+    editPlan: { ...editPlan, syntheticAvatar: input.syntheticAvatar === true },
+  });
   await db.uGCProject.update({
     where: { id: project.id },
     data: { status: "RENDERED", renderedAssetIds: json(outputIds) },
   });
+  const campaignId = project.campaignId;
+  if (campaignId)
+    await db.campaignEvent.create({
+      data: {
+        workspaceId: context.workspaceId,
+        campaignId,
+        kind: "UGC_RENDERED",
+        message:
+          "UGC output rendered from verified footage and attached to the campaign evidence trail.",
+        actorId: context.userId,
+        payload: json({
+          projectId: project.id,
+          outputAssetIds: outputIds,
+          capabilities: analyzed.capabilities,
+        }),
+      },
+    });
   return {
     ...result,
+    lipSync: lipSync?.job ?? null,
     audioMix: mixed?.job ?? null,
     projectId,
     editPlan,
     analysis: analyzed.analysis,
     capabilities: analyzed.capabilities,
+    reviewArtifacts,
   };
 }
 
@@ -752,7 +1203,7 @@ export async function trainCustomModel(
   });
   if (existing) return { job: existing, deduplicated: true };
   const endpoint = process.env.CUSTOM_MODEL_TRAIN_URL;
-  if (!endpoint && process.env.NODE_ENV === "production")
+  if (!endpoint && requiresProductionAuthentication())
     throw new ApiError(
       503,
       "MODEL_TRAINING_NOT_CONFIGURED",
@@ -854,7 +1305,7 @@ export async function getCustomModelTrainingJob(
   if (!job.externalJobId || ["COMPLETED", "FAILED", "CANCELLED"].includes(job.status)) return job;
   const endpoint = process.env.CUSTOM_MODEL_TRAIN_STATUS_URL;
   if (!endpoint) {
-    if (process.env.NODE_ENV === "production")
+    if (requiresProductionAuthentication())
       throw new ApiError(
         503,
         "MODEL_TRAINING_STATUS_NOT_CONFIGURED",

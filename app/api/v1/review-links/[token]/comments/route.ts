@@ -5,11 +5,16 @@ import {
   normalizeMentions,
   normalizeReviewAnchor,
 } from "../../../../../../src/server/review-comments";
+import {
+  limitPublicReviewRequest,
+  readBoundedPublicJson,
+} from "../../../../../../src/server/public-review";
 
 export async function POST(request: Request, { params }: { params: Promise<{ token: string }> }) {
   try {
     const { token } = await params;
-    const body = (await request.json()) as Record<string, unknown>;
+    await limitPublicReviewRequest(request, token, "comment");
+    const body = await readBoundedPublicJson(request);
     return NextResponse.json(
       {
         data: await addReviewLinkComment(token, {

@@ -81,7 +81,49 @@ export async function POST(request: Request) {
     const name = typeof body.name === "string" ? body.name.trim() : "";
     if (!name || !body.profile || typeof body.profile !== "object")
       throw new ApiError(400, "INVALID_BRAND", "name and a structured profile are required.");
-    const profile = normalizedProfile(body.profile);
+    const suppliedProfile = object(body.profile);
+    const suppliedReferenceIds = Array.isArray(body.referenceAssetIds)
+      ? body.referenceAssetIds
+      : Array.isArray(suppliedProfile.referenceAssetIds)
+        ? suppliedProfile.referenceAssetIds
+        : [];
+    const referenceAssetIds = [
+      ...new Set(
+        suppliedReferenceIds.filter(
+          (value): value is string => typeof value === "string" && Boolean(value.trim()),
+        ),
+      ),
+    ];
+    if (referenceAssetIds.length) {
+      const referenceAssets = await db.asset.findMany({
+        where: {
+          workspaceId: context.workspaceId,
+          id: { in: referenceAssetIds },
+          deletedAt: null,
+        },
+        select: { id: true, status: true },
+      });
+      if (referenceAssets.length !== referenceAssetIds.length)
+        throw new ApiError(
+          404,
+          "BRAND_REFERENCE_ASSET_NOT_FOUND",
+          "Every brand reference asset must belong to this workspace.",
+        );
+      if (
+        referenceAssets.some(
+          (asset) => asset.status === "UPLOADING" || asset.status === "QUARANTINED",
+        )
+      )
+        throw new ApiError(
+          409,
+          "BRAND_REFERENCE_ASSET_NOT_READY",
+          "Every brand reference asset must pass verification before approval.",
+        );
+    }
+    const profile = {
+      ...normalizedProfile(body.profile),
+      referenceAssetIds,
+    };
     const brand = await db.$transaction(async (tx) => {
       const current = await tx.brand.findUnique({
         where: { workspaceId_name: { workspaceId: context.workspaceId, name } },

@@ -74,6 +74,12 @@ export type ProductLockBrief = {
   audience: string;
   language: string;
   cta: string;
+  headline?: string;
+  body?: string;
+  hashtags?: string[];
+  altText?: string;
+  campaignId?: string;
+  directionId?: string;
 };
 
 export type OutputAsset = {
@@ -90,6 +96,8 @@ export type OutputAsset = {
   aiEdited: boolean;
   assetId?: string;
   downloadUrl?: string;
+  qualityScores?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
 };
 
 export type ReviewComment = {
@@ -97,6 +105,8 @@ export type ReviewComment = {
   author: string;
   text: string;
   region: string;
+  assetId?: string;
+  anchor?: { x?: number; y?: number; t?: number };
   createdAt: number;
 };
 
@@ -263,7 +273,9 @@ export function quoteProductLock({
   });
   const countSafe = Math.max(1, Math.min(12, count));
   const formatCount = Math.max(1, outputFormats.length);
-  const credits = countSafe * selection.route.unitsPerOutput;
+  // A requested ratio is a separate rendered/provider output. Quotes and
+  // reservations must therefore use the same cardinality as provider cost.
+  const credits = countSafe * formatCount * selection.route.unitsPerOutput;
   return {
     routeId: selection.route.id,
     qualityMode: selection.route.qualityMode,
@@ -271,7 +283,7 @@ export function quoteProductLock({
     providerCostMinor: Math.round(countSafe * formatCount * selection.route.unitsPerOutput * 5.5),
     currency: "INR",
     etaSec: selection.route.avgSec * countSafe,
-    outputCount: countSafe,
+    outputCount: countSafe * formatCount,
     outputFormats,
     label: `${selection.route.label} route · ${countSafe} controlled variant${
       countSafe === 1 ? "" : "s"

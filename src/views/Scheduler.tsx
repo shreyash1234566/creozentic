@@ -151,7 +151,7 @@ function mapServerSchedule(schedule: Record<string, unknown>): Run {
 
 export default function Scheduler() {
   const { logAudit, backendEnabled } = useStore();
-  const [runs, setRuns] = useState<Run[]>(INITIAL);
+  const [runs, setRuns] = useState<Run[]>(backendEnabled ? [] : INITIAL);
   const [ceilingDraft, setCeilingDraft] = useState<Record<string, number>>({});
   const [serverError, setServerError] = useState("");
   const [newName, setNewName] = useState("Daily Creative Autopilot");
@@ -237,7 +237,7 @@ export default function Scheduler() {
     <div className="space-y-8">
       <PageHeader
         kicker="Phase 4 · Scheduled & API runs"
-        title="Scheduled runs"
+        title="Calendar & publish"
         desc="Recurring aur API runs cost ceilings ke saath — koi run apni cap cross kare toh block hokar approval maangta hai, chupke se spend nahi hota. Har run idempotent hai (content-hash se duplicates rukte hain), receipts deta hai, aur rollback ho sakta hai."
         right={
           <Btn onClick={() => logAudit("opened schedule builder", "new run")}>+ New schedule</Btn>
@@ -356,7 +356,7 @@ export default function Scheduler() {
       <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
         <Panel title="Run receipts · history">
           <div className="divide-y divide-line">
-            {RECEIPTS.map((r) => (
+            {(backendEnabled ? [] : RECEIPTS).map((r) => (
               <div key={r.id} className="flex items-start justify-between gap-4 px-5 py-4">
                 <div>
                   <div className="flex items-center gap-2">
@@ -376,6 +376,12 @@ export default function Scheduler() {
                 </span>
               </div>
             ))}
+            {backendEnabled && (
+              <div className="px-5 py-8 text-sm text-ink-soft">
+                Server publish receipts will appear here after a scheduled run produces a delivery
+                receipt.
+              </div>
+            )}
           </div>
         </Panel>
 

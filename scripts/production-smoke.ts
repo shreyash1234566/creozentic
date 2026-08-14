@@ -41,6 +41,8 @@ async function check(path: string, init: RequestInit = {}) {
 await check("/api/v1/health/ready");
 await check("/api/v1/usage");
 await check("/api/v1/capabilities");
+await check("/api/v1/workflows");
+await check("/api/v1/consistency-checks");
 await check("/api/v1/daily-plans");
 await check("/api/v1/content-calendar");
 await check("/api/v1/agency/queue");

@@ -169,7 +169,7 @@ export async function assessCreativeFatigue(context: RequestContext) {
 export async function updatePerformanceRecommendation(
   context: RequestContext,
   recommendationId: string,
-  input: { status?: "OPEN" | "APPLIED" | "DISMISSED"; optOut?: boolean },
+  input: { status?: "OPEN" | "APPLIED" | "DISMISSED"; optOut?: boolean; action?: string },
 ) {
   requireRole(context, "EDITOR");
   const recommendation = await db.performanceRecommendation.findFirst({
@@ -189,6 +189,7 @@ export async function updatePerformanceRecommendation(
     data: {
       status,
       optOut: input.optOut ?? recommendation.optOut,
+      action: input.action?.trim() || undefined,
       appliedAt: status === "APPLIED" ? new Date() : recommendation.appliedAt,
     },
   });

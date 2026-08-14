@@ -10,7 +10,11 @@ export async function POST(
   try {
     const context = await getRequestContext(request);
     const { reviewId } = await params;
-    const body = (await request.json()) as { decision?: string; reason?: string };
+    const body = (await request.json()) as {
+      decision?: string;
+      reason?: string;
+      approvedOutputIds?: unknown;
+    };
     if (body.decision !== "approve" && body.decision !== "reject" && body.decision !== "refine")
       return NextResponse.json(
         {
@@ -22,7 +26,13 @@ export async function POST(
         { status: 400 },
       );
     return NextResponse.json({
-      data: await decideReview(context, reviewId, { decision: body.decision, reason: body.reason }),
+      data: await decideReview(context, reviewId, {
+        decision: body.decision,
+        reason: body.reason,
+        approvedOutputIds: Array.isArray(body.approvedOutputIds)
+          ? body.approvedOutputIds.filter((value): value is string => typeof value === "string")
+          : undefined,
+      }),
     });
   } catch (error) {
     return jsonError(error);

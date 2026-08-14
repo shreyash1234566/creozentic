@@ -103,7 +103,8 @@ function escapeFfmpegText(value: string) {
 }
 
 function ffmpegFontFile() {
-  const configured = process.env.FFMPEG_FONT_PATH ?? "C:/Windows/Fonts/arial.ttf";
+  const configured = process.env.FFMPEG_FONT_PATH?.trim();
+  if (!configured) return undefined;
   return configured.replace(/\\/g, "/").replace(":", "\\:");
 }
 
@@ -180,9 +181,11 @@ export async function renderLocally(input: LocalRenderInput) {
           ? input.config.captions.map(text).join(" ")
           : text(input.config.captionText ?? input.config.captions);
         if (captionText) {
+          const fontFile = ffmpegFontFile();
+          const font = fontFile ? `fontfile='${fontFile}'` : "font='Sans'";
           args.push(
             "-vf",
-            `drawtext=fontfile='${ffmpegFontFile()}':fontcolor=white:fontsize=48:box=1:boxcolor=black@0.45:boxborderw=12:text='${escapeFfmpegText(captionText)}':x=(w-text_w)/2:y=h-180`,
+            `drawtext=${font}:fontcolor=white:fontsize=48:box=1:boxcolor=black@0.45:boxborderw=12:text='${escapeFfmpegText(captionText)}':x=(w-text_w)/2:y=h-180`,
           );
         }
       }
@@ -258,7 +261,17 @@ export async function renderLocally(input: LocalRenderInput) {
             "[a]",
           );
         }
-        args.push("-c:a", "aac", "-b:a", "192k", outputPath);
+        args.push(
+          "-af",
+          "loudnorm=I=-14:TP=-1.5:LRA=11",
+          "-ar",
+          "48000",
+          "-c:a",
+          "aac",
+          "-b:a",
+          "192k",
+          outputPath,
+        );
         await execFileAsync(ffmpegPath(), args, {
           timeout: 180_000,
           windowsHide: true,
@@ -298,7 +311,13 @@ export async function renderLocally(input: LocalRenderInput) {
           mimeType: input.sourceAssets[0].mimeType,
           objectKey,
           contentHash: hash(sourceObject.body),
-          metadata: { renderer: "passthrough-local-upscale", deterministic: true },
+          metadata: {
+            renderer: "passthrough-local-upscale",
+            deterministic: true,
+            quality: "source-preserving-copy",
+            warning:
+              "Image super-resolution is not configured; bytes were preserved without enlargement.",
+          },
         },
       ],
     };

@@ -23,6 +23,12 @@ type Asset = {
   status: "immutable" | "derived" | "approved" | "rejected";
   locale?: string;
   src?: string;
+  sourceReadiness?: string;
+  rightsStatus?: string;
+  productRef?: string;
+  brandRef?: string;
+  campaigns?: string[];
+  scanSummary?: string;
 };
 
 type Product = {
@@ -203,6 +209,24 @@ function mapAssetStatus(value: unknown): Asset["status"] {
 }
 
 function mapServerAsset(row: Record<string, unknown>, index: number): Asset {
+  const product =
+    row.product && typeof row.product === "object"
+      ? (row.product as Record<string, unknown>)
+      : null;
+  const brand =
+    row.brand && typeof row.brand === "object" ? (row.brand as Record<string, unknown>) : null;
+  const scans = Array.isArray(row.scans) ? row.scans : [];
+  const outputs = Array.isArray(row.outputs) ? row.outputs : [];
+  const metadata =
+    row.metadata && typeof row.metadata === "object"
+      ? (row.metadata as Record<string, unknown>)
+      : {};
+  const rights = String(metadata.rightsStatus ?? metadata.rights ?? "not recorded");
+  const scanStatuses = scans
+    .map((scan) =>
+      scan && typeof scan === "object" ? String((scan as Record<string, unknown>).status) : "",
+    )
+    .filter(Boolean);
   return {
     id: String(row.id),
     name: String(row.name ?? "Untitled asset"),
@@ -213,6 +237,24 @@ function mapServerAsset(row: Record<string, unknown>, index: number): Asset {
     parent: typeof row.parentId === "string" ? row.parentId : undefined,
     status: mapAssetStatus(row.status),
     locale: typeof row.locale === "string" ? row.locale : undefined,
+    sourceReadiness: String(row.status ?? "PENDING").toLowerCase(),
+    rightsStatus: rights,
+    productRef: product
+      ? String(product.title ?? "Product") + " · " + String(product.sku ?? "SKU")
+      : undefined,
+    brandRef: brand
+      ? String(brand.name ?? "Brand") + " · v" + String(brand.version ?? "—")
+      : undefined,
+    campaigns: outputs
+      .map((output) =>
+        output && typeof output === "object" && (output as Record<string, unknown>).campaign
+          ? String(
+              ((output as Record<string, unknown>).campaign as Record<string, unknown>).name ?? "",
+            )
+          : "",
+      )
+      .filter(Boolean),
+    scanSummary: scanStatuses.length ? scanStatuses.join(" · ") : "not scanned",
   };
 }
 
@@ -340,7 +382,7 @@ export default function AssetLibrary() {
     <div className="space-y-8">
       <PageHeader
         kicker="Added foundation · single source of truth"
-        title="Asset library & catalogue"
+        title="Product & source library"
         desc="Har product, logo, reference aur output yahin rehta hai — originals immutable, har transform ek nayi version banata hai. Batch aur product-lock isi catalogue se chalte hain, filenames se nahi."
         right={
           <>
@@ -569,6 +611,40 @@ export default function AssetLibrary() {
                 </div>
               ))}
             </dl>
+
+            <div className="mt-5 rounded-lg border border-line bg-paper-deep p-3">
+              <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-soft">
+                Readiness & usage
+              </div>
+              <div className="mt-2 space-y-1 font-mono text-[10px] text-ink-soft">
+                <div className="flex justify-between gap-3">
+                  <span>Source readiness</span>
+                  <span className="text-ink">{sel.sourceReadiness ?? sel.status}</span>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <span>Rights</span>
+                  <span className="text-ink">{sel.rightsStatus ?? "not recorded"}</span>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <span>Product / SKU</span>
+                  <span className="text-right text-ink">{sel.productRef ?? "not linked"}</span>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <span>Brand</span>
+                  <span className="text-right text-ink">{sel.brandRef ?? "not linked"}</span>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <span>Scans</span>
+                  <span className="text-right text-ink">{sel.scanSummary ?? "not scanned"}</span>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <span>Campaigns</span>
+                  <span className="text-right text-ink">
+                    {sel.campaigns?.length ? sel.campaigns.join(", ") : "not used yet"}
+                  </span>
+                </div>
+              </div>
+            </div>
 
             <div className="mt-6 font-mono text-[11px] uppercase tracking-[0.14em] text-ink-soft">
               Version lineage

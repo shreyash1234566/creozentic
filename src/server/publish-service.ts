@@ -6,6 +6,7 @@ import { usableConnectionAccessToken } from "./connector-oauth";
 import type { RequestContext } from "./auth";
 import { validatePlatformOutput } from "./platform-specs";
 import { enforceSafety } from "./safety";
+import { computeCampaignPassport } from "./campaign-reliability";
 import { requestProvider } from "./provider-http";
 import { readObject } from "./storage";
 
@@ -107,6 +108,16 @@ export async function publishApprovedOutput(
       "PUBLISH_REQUIRES_APPROVAL",
       "The workflow review task is not approved.",
     );
+  if (output.campaignId) {
+    const passport = await computeCampaignPassport(context, output.campaignId);
+    if (passport.status !== "READY")
+      throw new ApiError(
+        409,
+        "CREATIVE_PASSPORT_BLOCKED",
+        "The Creative Passport is not ready. Missing evidence must be repaired before publishing.",
+        { passportId: passport.id, status: passport.status, evidence: passport.evidence },
+      );
+  }
   const qualityScores = output.qualityScores as Record<string, { verdict?: string }> | null;
   if (qualityScores && Object.values(qualityScores).some((check) => check?.verdict === "critical"))
     throw new ApiError(409, "QUALITY_GATE_BLOCKED", "A critical QA result blocks publishing.");
@@ -206,6 +217,7 @@ export async function publishApprovedOutput(
       data: {
         workspaceId: context.workspaceId,
         outputAssetId: output.id,
+        campaignId: output.campaignId ?? undefined,
         connectionId: connection.id,
         platform: input.platform,
         destination: String(receiptBase.destination),

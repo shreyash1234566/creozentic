@@ -13,9 +13,14 @@ import {
 import { parseCsvRows } from "../src/server/tabular-import";
 import { parseXlsxRows } from "../src/server/tabular-import";
 import { consumedCreditsFromLedgerAmount } from "../src/server/spending";
+import { quoteProductLock } from "../src/domain";
 import * as XLSX from "xlsx";
 import { normalizeReviewAnchor } from "../src/server/review-comments";
-import { renderWorkflowTemplate, workflowPromptForNode } from "../src/server/workflow-runtime";
+import {
+  renderWorkflowTemplate,
+  shouldRunWorkflowNode,
+  workflowPromptForNode,
+} from "../src/server/workflow-runtime";
 
 test("workflow graphs reject cycles and accept a typed DAG", () => {
   assert.deepEqual(
@@ -76,6 +81,12 @@ test("workflow node plans preserve typed runtime configuration and legacy versio
     { id: "environment", type: "image_generation", config: {} },
     { id: "review", type: "human_review", config: {} },
   ]);
+  assert.deepEqual(
+    workflowNodePlan({
+      nodes: [{ id: "compare", type: "model_comparison", config: { modelRefs: ["a", "b"] } }],
+    }),
+    [{ id: "compare", type: "model_comparison", config: { modelRefs: ["a", "b"] } }],
+  );
 });
 
 test("workflow runtime orders graph nodes and substitutes only approved state paths", () => {
@@ -105,6 +116,23 @@ test("workflow runtime orders graph nodes and substitutes only approved state pa
     ]),
     "Warm home. sale",
   );
+});
+
+test("workflow conditional edges persist only the selected branch", () => {
+  const graph = {
+    nodes: [
+      { id: "condition", type: "condition" },
+      { id: "approved", type: "prompt_template" },
+      { id: "rejected", type: "prompt_template" },
+    ],
+    edges: [
+      { from: "condition", to: "approved", branch: "true" },
+      { from: "condition", to: "rejected", branch: "false" },
+    ],
+  };
+  const state = { nodes: { condition: { branch: "true" } } };
+  assert.equal(shouldRunWorkflowNode(graph, "approved", state), true);
+  assert.equal(shouldRunWorkflowNode(graph, "rejected", state), false);
 });
 
 test("platform specifications block invalid published media", () => {
@@ -141,6 +169,28 @@ test("quality gate blocks an unverified locked product output", () => {
   assert.equal(scores["Product / identity truth"].verdict, "critical");
 });
 
+test("product-lock cannot pass on caller-supplied booleans without versioned evidence", () => {
+  const scores = evaluateCreativeOutputs(
+    { product: "Chair", sku: "CHAIR-1", mode: "lock" } as never,
+    [
+      {
+        width: 1080,
+        height: 1080,
+        objectKey: "workspaces/demo/output.png",
+        contentHash: "sha256:test",
+        metadata: {
+          productTruth: true,
+          brandChecked: true,
+          claimsChecked: true,
+          rightsChecked: true,
+        },
+      },
+    ],
+  );
+  assert.equal(scores["Product / identity truth"].verdict, "critical");
+  assert.equal(scores["Brand rules & typography"].verdict, "critical");
+});
+
 test("billing webhook signatures reject tampering", () => {
   const body = '{"id":"evt_1"}';
   const secret = "test-secret";
@@ -175,6 +225,17 @@ test("monthly spend usage counts settled consumption instead of netting reservat
   assert.equal(consumedCreditsFromLedgerAmount(-24), 24);
   assert.equal(consumedCreditsFromLedgerAmount(0), 0);
   assert.equal(consumedCreditsFromLedgerAmount(24), 0);
+});
+
+test("multi-format quotes reserve credits for every rendered output", () => {
+  const quote = quoteProductLock({
+    count: 2,
+    qualityMode: "balanced",
+    productLock: true,
+    outputFormats: ["1:1", "9:16"],
+  });
+  assert.equal(quote.credits, 4);
+  assert.equal(quote.outputCount, 4);
 });
 
 test("review anchors validate image regions and video timestamps", () => {

@@ -31,6 +31,7 @@ export async function POST(
           bRollAssetIds,
           musicAssetId: typeof body.musicAssetId === "string" ? body.musicAssetId : undefined,
           voiceAssetId: typeof body.voiceAssetId === "string" ? body.voiceAssetId : undefined,
+          coverShotId: typeof body.coverShotId === "string" ? body.coverShotId : undefined,
           outputDurationsSec,
           consentSubject: typeof body.consentSubject === "string" ? body.consentSubject : undefined,
           syntheticAvatar: body.syntheticAvatar === true,

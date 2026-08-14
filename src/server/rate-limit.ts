@@ -10,7 +10,16 @@ function client() {
     redis = null;
     return redis;
   }
-  redis = new Redis(process.env.REDIS_URL, { maxRetriesPerRequest: 1, lazyConnect: true });
+  redis = new Redis(process.env.REDIS_URL, {
+    maxRetriesPerRequest: 1,
+    lazyConnect: true,
+    enableOfflineQueue: false,
+    connectTimeout: 750,
+    retryStrategy: () => null,
+  });
+  // ioredis emits connection failures even when the promise is caught. Keep the
+  // configured-but-unavailable path quiet and let the local limiter take over.
+  redis.on("error", () => undefined);
   void redis.connect().catch(() => undefined);
   return redis;
 }

@@ -46,12 +46,14 @@ export default function ModelStudio() {
       .then((capabilities) => {
         const models = capabilities.configuredProviders.map((provider) => ({
           id: provider.id,
-          name: provider.id,
-          provider: "Configured provider",
+          name: provider.model ? `${provider.id} · ${provider.model}` : provider.id,
+          provider: provider.region
+            ? `Configured provider · ${provider.region}`
+            : "Configured provider",
           kind: "image" as const,
-          costUsd: 0,
+          costUsd: provider.costMinorPerOutput ? provider.costMinorPerOutput / 100 / USD_INR : 0,
           avgSec: 0,
-          quality: 0,
+          quality: provider.health === "healthy" || provider.health === "configured" ? 4 : 0,
         }));
         setProviderModels(models);
         setSelected(models.slice(0, 3).map((model) => model.id));

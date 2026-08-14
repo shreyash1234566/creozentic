@@ -120,7 +120,12 @@ export async function readReviewLink(token: string) {
 
 export async function decideReviewLink(
   token: string,
-  input: { decision: "approve" | "reject" | "refine"; reason?: string; reviewerName?: string },
+  input: {
+    decision: "approve" | "reject" | "refine";
+    reason?: string;
+    reviewerName?: string;
+    approvedOutputIds?: string[];
+  },
 ) {
   const hash = tokenHash(token);
   const link = await db.reviewLink.findUnique({
@@ -140,7 +145,7 @@ export async function decideReviewLink(
   const result = await db.$transaction(async (tx) => {
     const review = await tx.reviewTask.findFirst({
       where: { id: link.reviewTaskId, workspaceId: link.workspaceId },
-      include: { run: { include: { workflowVersion: true } } },
+      include: { run: { include: { workflowVersion: true, outputs: true } } },
     });
     if (!review) throw new ApiError(404, "REVIEW_NOT_FOUND", "The review task was not found.");
     if (review.status === ReviewStatus.APPROVED || review.status === ReviewStatus.REJECTED)
@@ -152,6 +157,35 @@ export async function decideReviewLink(
         409,
         "QUALITY_GATE_BLOCKED",
         "A critical quality check must be repaired before approval.",
+      );
+    if (input.decision === "approve" && review.run.campaignId) {
+      const passport = await tx.creativePassport.findFirst({
+        where: {
+          workspaceId: link.workspaceId,
+          campaignId: review.run.campaignId,
+          outputAssetId: null,
+        },
+        orderBy: { computedAt: "desc" },
+      });
+      if (!passport || passport.status !== "READY")
+        throw new ApiError(
+          409,
+          "CREATIVE_PASSPORT_BLOCKED",
+          "The Creative Passport must be ready before this campaign output can be approved.",
+          { passportId: passport?.id ?? null, status: passport?.status ?? "MISSING" },
+        );
+    }
+    const approvedOutputIds = input.approvedOutputIds?.length
+      ? [...new Set(input.approvedOutputIds)]
+      : review.run.outputs.map((output) => output.id);
+    if (
+      input.decision === "approve" &&
+      approvedOutputIds.some((id) => !review.run.outputs.some((output) => output.id === id))
+    )
+      throw new ApiError(
+        400,
+        "INVALID_APPROVED_OUTPUTS",
+        "Every approved output must belong to this review.",
       );
     const nextStatus =
       input.decision === "approve"
@@ -169,6 +203,7 @@ export async function decideReviewLink(
       action: input.decision,
       reason: input.reason ?? null,
       reviewerName: input.reviewerName ?? "External reviewer",
+      approvedOutputIds: input.decision === "approve" ? approvedOutputIds : [],
       at: new Date().toISOString(),
     };
     const updatedReview = await tx.reviewTask.update({
@@ -192,8 +227,21 @@ export async function decideReviewLink(
       });
     if (input.decision === "approve")
       await tx.outputAsset.updateMany({
-        where: { runId: review.runId, workspaceId: link.workspaceId },
+        where: {
+          runId: review.runId,
+          workspaceId: link.workspaceId,
+          id: { in: approvedOutputIds },
+        },
         data: { status: "APPROVED", approvedAt: new Date() },
+      });
+    if (input.decision === "approve" && input.approvedOutputIds?.length)
+      await tx.outputAsset.updateMany({
+        where: {
+          runId: review.runId,
+          workspaceId: link.workspaceId,
+          id: { notIn: approvedOutputIds },
+        },
+        data: { status: "REJECTED" },
       });
     await tx.auditEvent.create({
       data: {

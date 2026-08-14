@@ -1,14 +1,27 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useStore } from "../store";
 import { SAMPLE_IMAGES, img } from "../data";
 import { PageHeader, Panel, Btn, PhaseTag } from "../ui";
-import { saveServerBrand } from "../client/api";
+import {
+  approveServerBrand,
+  getServerAssetDownload,
+  getServerAssets,
+  saveServerBrand,
+  testServerBrand,
+} from "../client/api";
 
 export default function BrandMemory() {
   const { brand, setBrand, backendEnabled } = useStore();
   const [draft, setDraft] = useState(brand);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
+  const [brandStatus, setBrandStatus] = useState(brand.approvalStatus ?? "DRAFT");
+  const [brandTest, setBrandTest] = useState<Awaited<ReturnType<typeof testServerBrand>> | null>(
+    null,
+  );
+  const [testing, setTesting] = useState(false);
+  const [serverAssets, setServerAssets] = useState<Record<string, unknown>[]>([]);
+  const [referenceUrls, setReferenceUrls] = useState<Record<string, string>>({});
   const dailyBase = draft.dailyPolicy ?? {
     postsPerWeek: 5,
     defaultMode: "APPROVAL" as const,
@@ -21,15 +34,49 @@ export default function BrandMemory() {
     defaultMode: String(dailyBase.defaultMode).toUpperCase() as typeof dailyBase.defaultMode,
   };
 
+  useEffect(() => {
+    if (!backendEnabled) return;
+    void getServerAssets()
+      .then((assets) => setServerAssets(assets))
+      .catch(() => setServerAssets([]));
+  }, [backendEnabled]);
+
+  useEffect(() => {
+    if (!backendEnabled) return;
+    const selected = draft.referenceAssetIds ?? [];
+    void Promise.all(
+      selected.slice(0, 10).map(async (id) => {
+        try {
+          return [id, (await getServerAssetDownload(id)).url] as const;
+        } catch {
+          return null;
+        }
+      }),
+    ).then((entries) =>
+      setReferenceUrls((current) => ({
+        ...current,
+        ...Object.fromEntries(
+          entries.filter((entry): entry is readonly [string, string] => Boolean(entry)),
+        ),
+      })),
+    );
+  }, [backendEnabled, draft.referenceAssetIds]);
+
   const dirty = JSON.stringify(draft) !== JSON.stringify(brand);
 
   const save = async () => {
     setError("");
     if (backendEnabled) {
       try {
-        const result = await saveServerBrand({ name: draft.name, profile: draft });
+        const result = await saveServerBrand({
+          name: draft.name,
+          profile: draft,
+          referenceAssetIds: draft.referenceAssetIds ?? [],
+        });
         const next = {
           ...draft,
+          id: result.id,
+          approvalStatus: "DRAFT",
           ...(result.profile as Partial<typeof draft>),
           name: result.name,
           version: result.version,
@@ -52,13 +99,43 @@ export default function BrandMemory() {
     setTimeout(() => setSaved(false), 1800);
   };
 
+  const approve = async () => {
+    if (!brand.id) return;
+    setError("");
+    try {
+      const result = await approveServerBrand(brand.id);
+      setBrandStatus(String(result.approvalStatus ?? "APPROVED"));
+      setSaved(true);
+      setTimeout(() => setSaved(false), 1800);
+    } catch (reason) {
+      setError(
+        reason instanceof Error ? reason.message : "The Brand Brain version could not be approved.",
+      );
+    }
+  };
+
+  const runBrandTest = async () => {
+    if (!brand.id) return;
+    setTesting(true);
+    setError("");
+    try {
+      setBrandTest(await testServerBrand(brand.id));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "The Brand Test could not run.");
+    } finally {
+      setTesting(false);
+    }
+  };
+
   const toggleRef = (id: string) =>
     setDraft((d) => ({
       ...d,
-      references: d.references.includes(id)
-        ? d.references.filter((r) => r !== id)
-        : [...d.references, id],
+      referenceAssetIds: (d.referenceAssetIds ?? []).includes(id)
+        ? (d.referenceAssetIds ?? []).filter((r) => r !== id)
+        : [...(d.referenceAssetIds ?? []), id],
     }));
+
+  const selectedReferenceIds = backendEnabled ? (draft.referenceAssetIds ?? []) : draft.references;
 
   const setColor = (i: number, v: string) =>
     setDraft((d) => ({
@@ -70,19 +147,178 @@ export default function BrandMemory() {
     <div className="space-y-8">
       <PageHeader
         kicker="Phase 1–2 · Persistent"
-        title="Brand memory"
-        desc="Har brand ka persistent profile — colours, tone, logo, reference images. Every generation across the platform reads from this so output stays on-brand without re-prompting."
+        title="Brand Brain"
+        desc="A helpful creative director for your workspace: approved examples, avoid examples, product truth, tone, templates, and publishing policy in one versioned source of truth."
         right={
           <div className="flex items-center gap-3">
             {saved && <span className="font-mono text-[11px] text-leaf">✓ Saved to memory</span>}
             <Btn disabled={!dirty} onClick={save}>
-              Save profile
+              Save draft
             </Btn>
+            {backendEnabled && brand.id && (
+              <>
+                <Btn variant="line" onClick={() => void runBrandTest()} disabled={testing}>
+                  {testing ? "Testing…" : "Run Brand Test"}
+                </Btn>
+                <Btn variant="line" onClick={approve}>
+                  Approve version
+                </Btn>
+              </>
+            )}
           </div>
         }
       />
 
       {error && <p className="font-mono text-[11px] text-saffron-deep">{error}</p>}
+
+      {backendEnabled && (
+        <Panel title="Brand Brain readiness">
+          <div className="grid gap-4 p-5 sm:grid-cols-3">
+            <Readiness label="Current version" value={`v${draft.version}`} />
+            <Readiness
+              label="Status"
+              value={brandStatus === "APPROVED" ? "Approved" : "Draft · not active"}
+            />
+            <Readiness label="Brand test" value="Preview rules before activation" />
+          </div>
+          <p className="border-t border-line px-5 py-3 text-sm text-ink-soft">
+            A saved draft never changes published content. Approve the version after checking the
+            summary and one test pack.
+          </p>
+        </Panel>
+      )}
+
+      {backendEnabled && (
+        <Panel title="First-use intake · sources and trust examples">
+          <div className="grid gap-4 p-5 sm:grid-cols-3">
+            <Field label="Website">
+              <input
+                value={draft.website ?? ""}
+                onChange={(event) => setDraft({ ...draft, website: event.target.value })}
+                placeholder="https://brand.example"
+                className="w-full rounded-lg border border-line bg-paper px-3 py-2 text-sm outline-none focus:border-saffron-deep"
+              />
+            </Field>
+            <Field label="Instagram">
+              <input
+                value={draft.instagram ?? ""}
+                onChange={(event) => setDraft({ ...draft, instagram: event.target.value })}
+                placeholder="@brand"
+                className="w-full rounded-lg border border-line bg-paper px-3 py-2 text-sm outline-none focus:border-saffron-deep"
+              />
+            </Field>
+            <Field label="Drive / asset folder">
+              <input
+                value={draft.sourceFolder ?? ""}
+                onChange={(event) => setDraft({ ...draft, sourceFolder: event.target.value })}
+                placeholder="clients/brand/references"
+                className="w-full rounded-lg border border-line bg-paper px-3 py-2 text-sm outline-none focus:border-saffron-deep"
+              />
+            </Field>
+          </div>
+          <p className="border-t border-line px-5 py-3 font-mono text-[10px] text-ink-soft">
+            Add 5–10 approved examples and at least 3 avoid examples below. The server Brand Test
+            explains what is still missing before activation.
+          </p>
+        </Panel>
+      )}
+
+      {brandTest && (
+        <Panel title="Brand Test · activation evidence">
+          <div className="space-y-4 p-5">
+            <div
+              className={`rounded-lg border px-4 py-3 ${brandTest.ready ? "border-leaf bg-leaf/8" : "border-saffron-deep bg-saffron-deep/5"}`}
+            >
+              <div className="text-sm font-medium">
+                {brandTest.ready ? "Ready for activation" : "Needs input before activation"}
+              </div>
+              <p className="mt-1 text-sm text-ink-soft">{brandTest.summary}</p>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {brandTest.checks.map((check) => (
+                <div
+                  key={check.label}
+                  className="flex items-center gap-2 rounded border border-line px-3 py-2 font-mono text-[10px]"
+                >
+                  <span className={check.valid ? "text-leaf" : "text-saffron-deep"}>
+                    {check.valid ? "✓" : "!"}
+                  </span>
+                  {check.label}
+                </div>
+              ))}
+            </div>
+            <p className="font-mono text-[10px] text-ink-soft">
+              {brandTest.samplePack.explanation}
+            </p>
+            <div className="grid gap-4 lg:grid-cols-[1fr_1fr]">
+              <div className="rounded-lg border border-line p-4">
+                <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-soft">
+                  Sample campaign pack · {brandTest.samplePack.status.replace(/_/g, " ")}
+                </div>
+                <div className="mt-3 grid grid-cols-3 gap-2">
+                  {brandTest.samplePack.referenceAssetIds.slice(0, 3).map((id) => (
+                    <div key={id} className="overflow-hidden rounded border border-line">
+                      {referenceUrls[id] ? (
+                        <img
+                          src={referenceUrls[id]}
+                          alt="approved reference"
+                          className="aspect-square w-full object-cover"
+                        />
+                      ) : (
+                        <div className="flex aspect-square items-center justify-center bg-paper-deep font-mono text-[9px] text-ink-soft">
+                          verified reference
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  {brandTest.samplePack.formats.map((format) => (
+                    <span
+                      key={format}
+                      className="rounded-full border border-line px-2 py-1 font-mono text-[9px] text-ink-soft"
+                    >
+                      {format}
+                    </span>
+                  ))}
+                </div>
+              </div>
+              <div className="rounded-lg border border-line p-4">
+                <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-soft">
+                  Copy & rules applied
+                </div>
+                <div className="mt-2 text-sm font-medium">
+                  {brandTest.samplePack.content.headline}
+                </div>
+                <p className="mt-1 text-sm text-ink-soft">{brandTest.samplePack.content.caption}</p>
+                <div className="mt-2 font-mono text-[10px] text-saffron-deep">
+                  {brandTest.samplePack.content.cta}
+                </div>
+                <div className="mt-3 space-y-1">
+                  {brandTest.samplePack.rulesApplied.map((rule) => (
+                    <div key={rule} className="font-mono text-[10px] text-ink-soft">
+                      · {rule}
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-3 grid gap-1">
+                  {brandTest.samplePack.deliverables.map((item) => (
+                    <div
+                      key={item.type}
+                      className="flex justify-between gap-2 rounded bg-paper-deep px-2 py-1 font-mono text-[9px]"
+                    >
+                      <span>{item.label}</span>
+                      <span className={item.state === "ready" ? "text-leaf" : "text-saffron-deep"}>
+                        {item.state}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </Panel>
+      )}
 
       <div className="grid gap-6 lg:grid-cols-[1.3fr_1fr]">
         <div className="space-y-6">
@@ -237,6 +473,33 @@ export default function BrandMemory() {
             </div>
           </Panel>
 
+          <Panel title="Approved / avoid references">
+            <div className="grid gap-4 p-5 sm:grid-cols-2">
+              <Field label="Approved examples or source IDs">
+                <textarea
+                  rows={3}
+                  value={(draft.approvedExamples ?? []).join("\n")}
+                  onChange={(event) =>
+                    setDraft({ ...draft, approvedExamples: splitLines(event.target.value) })
+                  }
+                  className="w-full resize-none rounded-lg border border-line bg-paper px-3 py-2 text-sm outline-none focus:border-saffron-deep"
+                  placeholder="Posts that are genuinely us"
+                />
+              </Field>
+              <Field label="Avoid examples or styles">
+                <textarea
+                  rows={3}
+                  value={(draft.avoidExamples ?? []).join("\n")}
+                  onChange={(event) =>
+                    setDraft({ ...draft, avoidExamples: splitLines(event.target.value) })
+                  }
+                  className="w-full resize-none rounded-lg border border-line bg-paper px-3 py-2 text-sm outline-none focus:border-saffron-deep"
+                  placeholder="Never create this style"
+                />
+              </Field>
+            </div>
+          </Panel>
+
           <Panel title="Daily Autopilot rules">
             <div className="grid gap-4 p-5 sm:grid-cols-2">
               <Field label="Posts per week">
@@ -326,12 +589,65 @@ export default function BrandMemory() {
 
           <Panel
             title="Reference images"
-            right={<PhaseTag phase={`${draft.references.length} selected`} />}
+            right={<PhaseTag phase={`${selectedReferenceIds.length} selected`} />}
           >
             {backendEnabled ? (
-              <div className="p-5 text-sm text-ink-soft">
-                Upload and verify reference assets in Asset Library to attach them to this brand. No
-                sample references are shown in server mode.
+              <div className="space-y-3 p-5">
+                <p className="text-sm text-ink-soft">
+                  Select 5–10 verified image assets. These IDs are persisted in the Brand Brain and
+                  are required for production reference conditioning; unverified or quarantined
+                  assets cannot be selected.
+                </p>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  {serverAssets
+                    .filter((asset) => String(asset.mimeType ?? "").startsWith("image/"))
+                    .slice(0, 40)
+                    .map((asset) => {
+                      const id = String(asset.id);
+                      const on = selectedReferenceIds.includes(id);
+                      const ready = ["READY", "IMMUTABLE", "DERIVED"].includes(
+                        String(asset.status),
+                      );
+                      return (
+                        <button
+                          key={id}
+                          disabled={!ready}
+                          onClick={() => toggleRef(id)}
+                          className={`relative overflow-hidden rounded-lg border-2 text-left ${
+                            on ? "border-saffron-deep" : "border-transparent"
+                          } ${ready ? "" : "opacity-40"}`}
+                        >
+                          {referenceUrls[id] ? (
+                            <img
+                              src={referenceUrls[id]}
+                              alt={String(asset.name ?? "reference")}
+                              className="aspect-square w-full object-cover"
+                            />
+                          ) : (
+                            <div className="flex aspect-square items-center justify-center bg-paper-deep p-2 text-center font-mono text-[9px] text-ink-soft">
+                              {String(asset.name ?? id).slice(0, 28)}
+                            </div>
+                          )}
+                          <span className="absolute bottom-0 left-0 right-0 bg-black/60 px-1.5 py-1 font-mono text-[8px] text-white">
+                            {ready ? String(asset.status).toLowerCase() : "verify first"}
+                          </span>
+                          {on && (
+                            <span className="absolute right-1 top-1 rounded-full bg-saffron-deep px-1.5 py-0.5 text-[10px] text-paper">
+                              ✓
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                </div>
+                {!serverAssets.some((asset) =>
+                  String(asset.mimeType ?? "").startsWith("image/"),
+                ) && (
+                  <p className="rounded-lg border border-dashed border-line px-3 py-3 font-mono text-[10px] text-saffron-deep">
+                    No image assets are available. Upload and complete Asset Library verification
+                    first.
+                  </p>
+                )}
               </div>
             ) : (
               <div className="grid grid-cols-4 gap-2 p-5">
@@ -386,14 +702,32 @@ export default function BrandMemory() {
               </div>
               <p className="mt-4 text-sm leading-relaxed text-ink-soft">{draft.tone}</p>
               <div className="mt-4 grid grid-cols-3 gap-2">
-                {draft.references.slice(0, 3).map((id) => (
-                  <img
-                    key={id}
-                    src={img(id, 200, 200)}
-                    alt="ref"
-                    className="aspect-square rounded-lg object-cover"
-                  />
-                ))}
+                {selectedReferenceIds.slice(0, 3).map((id) =>
+                  backendEnabled ? (
+                    referenceUrls[id] ? (
+                      <img
+                        key={id}
+                        src={referenceUrls[id]}
+                        alt="ref"
+                        className="aspect-square rounded-lg object-cover"
+                      />
+                    ) : (
+                      <div
+                        key={id}
+                        className="flex aspect-square items-center justify-center rounded-lg border border-line bg-paper-deep font-mono text-[9px] text-ink-soft"
+                      >
+                        asset pending
+                      </div>
+                    )
+                  ) : (
+                    <img
+                      key={id}
+                      src={img(id, 200, 200)}
+                      alt="ref"
+                      className="aspect-square rounded-lg object-cover"
+                    />
+                  ),
+                )}
               </div>
               <div className="mt-5 rounded-lg border border-dashed border-line px-3 py-2 font-mono text-[11px] text-ink-soft">
                 Injected into every prompt · read-only for Reviewer seats
@@ -422,4 +756,20 @@ function splitList(value: string) {
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function splitLines(value: string) {
+  return value
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function Readiness({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-line bg-paper px-3 py-3">
+      <div className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-soft">{label}</div>
+      <div className="mt-1 text-sm font-medium">{value}</div>
+    </div>
+  );
 }

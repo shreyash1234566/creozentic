@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { PageHeader, Panel, Btn } from "../ui";
 import { useStore } from "../store";
 import { SAMPLE_IMAGES, img } from "../data";
-import { createServerLocalization, getServerState } from "../client/api";
+import { createServerLocalization, getServerLocalizationJob, getServerState } from "../client/api";
 import { uid } from "../domain";
 
 type Locale = {
@@ -84,13 +84,20 @@ const TRANSLATIONS: Record<string, { headline: string; cta: string; warn?: strin
 };
 
 export default function Localization() {
-  const { logAudit, backendEnabled } = useStore();
+  const { brand, logAudit, backendEnabled } = useStore();
   const [locales, setLocales] = useState(LOCALES);
   const [error, setError] = useState("");
   const [running, setRunning] = useState(false);
   const [sourceOutputId, setSourceOutputId] = useState<string | undefined>();
   const [sourceText, setSourceText] = useState(backendEnabled ? "" : SOURCE);
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [job, setJob] = useState<Record<string, unknown> | null>(null);
+  const [lockedTermInput, setLockedTermInput] = useState(brand.name);
   const active = locales.filter((l) => l.on);
+  const activeLockedTerms = lockedTermInput
+    .split(",")
+    .map((term) => term.trim())
+    .filter(Boolean);
 
   const toggle = (code: string) =>
     setLocales((ls) => ls.map((l) => (l.code === code ? { ...l, on: !l.on } : l)));
@@ -104,14 +111,17 @@ export default function Localization() {
       }
       setRunning(true);
       try {
-        await createServerLocalization({
+        const result = await createServerLocalization({
           sourceOutputId,
           sourceText,
           sourceCta: "Shop on WhatsApp",
           locales: active.map((locale) => locale.code),
-          lockedTerms: [],
+          lockedTerms: activeLockedTerms,
           idempotencyKey: uid("localization"),
         });
+        const createdJob = result.job;
+        setJob(createdJob);
+        setJobId(String(createdJob.id ?? ""));
       } catch (reason) {
         setError(reason instanceof Error ? reason.message : "Localization could not be started.");
       } finally {
@@ -121,6 +131,28 @@ export default function Localization() {
     }
     logAudit("localized campaign", `Monsoon Sale · ${active.length} locales`);
   };
+
+  useEffect(() => {
+    if (!backendEnabled || !jobId) return;
+    let active = true;
+    const poll = async () => {
+      try {
+        const current = await getServerLocalizationJob(jobId);
+        if (!active) return;
+        setJob(current);
+        const status = String(current.status ?? "");
+        if (!["READY_FOR_REVIEW", "FAILED", "COMPLETED"].includes(status))
+          window.setTimeout(() => void poll(), 1500);
+      } catch (reason) {
+        if (active)
+          setError(reason instanceof Error ? reason.message : "Localization status failed.");
+      }
+    };
+    void poll();
+    return () => {
+      active = false;
+    };
+  }, [backendEnabled, jobId]);
 
   useEffect(() => {
     if (!backendEnabled) return;
@@ -193,14 +225,30 @@ export default function Localization() {
 
           <Panel title="Glossary · locked terms">
             <div className="space-y-2 p-4">
-              {GLOSSARY.map((g) => (
-                <div key={g.term} className="rounded-lg border border-line px-3 py-2">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[13px] font-medium">🔒 {g.term}</span>
+              {backendEnabled ? (
+                <label className="block">
+                  <span className="mb-1 block font-mono text-[10px] uppercase tracking-wide text-ink-soft">
+                    Brand / SKU / price / approved claims · comma separated
+                  </span>
+                  <input
+                    value={lockedTermInput}
+                    onChange={(event) => setLockedTermInput(event.target.value)}
+                    className="w-full rounded-lg border border-line bg-paper px-3 py-2 text-sm"
+                  />
+                  <span className="mt-2 block font-mono text-[10px] text-ink-soft">
+                    These are sent as immutable terms to the server localization job.
+                  </span>
+                </label>
+              ) : (
+                GLOSSARY.map((g) => (
+                  <div key={g.term} className="rounded-lg border border-line px-3 py-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[13px] font-medium">🔒 {g.term}</span>
+                    </div>
+                    <div className="font-mono text-[10px] text-ink-soft">{g.rule}</div>
                   </div>
-                  <div className="font-mono text-[10px] text-ink-soft">{g.rule}</div>
-                </div>
-              ))}
+                ))
+              )}
             </div>
           </Panel>
         </div>
@@ -234,10 +282,36 @@ export default function Localization() {
           <Panel title={`Locale variants · ${active.length}`}>
             <div className="grid gap-px bg-line sm:grid-cols-2">
               {backendEnabled ? (
-                <div className="bg-card p-5 text-sm text-ink-soft">
-                  Locale variants will appear after the configured text provider completes this
-                  localization job.
-                </div>
+                Array.isArray(job?.variants) && job.variants.length ? (
+                  (job.variants as Array<Record<string, unknown>>).map((variant) => (
+                    <div key={String(variant.id ?? variant.locale)} className="bg-card p-5">
+                      <div className="mb-2 flex items-center justify-between">
+                        <span className="font-mono text-[10px] uppercase tracking-wide text-saffron-deep">
+                          {String(variant.locale)}
+                        </span>
+                        <span className="font-mono text-[10px] uppercase text-ink-soft">
+                          {String(variant.status ?? "PENDING")}
+                        </span>
+                      </div>
+                      <div className="font-display text-base font-medium leading-snug">
+                        {String(variant.headline ?? "Waiting for provider output…")}
+                      </div>
+                      <div className="mt-1 font-mono text-[11px] text-ink-soft">
+                        {String(variant.cta ?? "—")}
+                      </div>
+                      {Array.isArray(variant.warnings) && variant.warnings.length > 0 && (
+                        <div className="mt-2 font-mono text-[10px] text-saffron-deep">
+                          {(variant.warnings as unknown[]).map(String).join(" · ")}
+                        </div>
+                      )}
+                    </div>
+                  ))
+                ) : (
+                  <div className="bg-card p-5 text-sm text-ink-soft">
+                    Start a server localization job to receive provider-backed variants and layout
+                    QA evidence.
+                  </div>
+                )
               ) : (
                 active.map((l) => {
                   const t = TRANSLATIONS[l.code];
@@ -280,6 +354,12 @@ export default function Localization() {
                 })
               )}
             </div>
+            {backendEnabled && job && (
+              <div className="border-t border-line px-5 py-3 font-mono text-[11px] text-ink-soft">
+                Job {String(job.id)} · {String(job.status)} · locked terms are checked before any
+                render.
+              </div>
+            )}
             <div className="border-t border-line px-5 py-3 font-mono text-[11px] text-ink-soft">
               Every locale is reviewed against the source before export · locked terms verified
               unchanged · disclaimers re-checked per market.

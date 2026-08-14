@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { ApiError } from "./api";
 import { requireRole, type RequestContext } from "./auth";
 import { db } from "./db";
+import { listCampaignAggregates } from "./campaign-reliability";
 
 function json(value: unknown) {
   return value as Prisma.InputJsonValue;
@@ -55,7 +56,7 @@ export async function createCampaign(
         "Every campaign product must belong to the workspace.",
       );
   }
-  return db.campaignBrief.create({
+  const brief = await db.campaignBrief.create({
     data: {
       workspaceId: context.workspaceId,
       brandId: input.brandId,
@@ -70,22 +71,55 @@ export async function createCampaign(
       createdBy: context.userId,
     },
   });
+  const campaign = await db.campaign.create({
+    data: {
+      workspaceId: context.workspaceId,
+      briefId: brief.id,
+      name,
+      objective,
+      status: "DRAFT",
+      lifecycleStatus: "NEEDS_INPUT",
+      briefSnapshot: json({
+        name,
+        objective,
+        productIds,
+        channels,
+        offer: input.offer,
+        audience: input.audience,
+        legalCopy: input.legalCopy,
+      }),
+      brandSnapshot: input.brandId ? json({ brandId: input.brandId }) : undefined,
+      createdBy: context.userId,
+    },
+  });
+  await db.campaignEvent.create({
+    data: {
+      workspaceId: context.workspaceId,
+      campaignId: campaign.id,
+      kind: "CAMPAIGN_CREATED",
+      message: "Campaign brief created. Add or confirm commercial facts before production.",
+      actorId: context.userId,
+      payload: json({ objective, channels }),
+    },
+  });
+  return { ...brief, campaignId: campaign.id };
 }
 
 export async function listCampaigns(context: RequestContext) {
-  requireRole(context, "VIEWER");
-  return db.campaignBrief.findMany({
-    where: { workspaceId: context.workspaceId },
-    orderBy: { updatedAt: "desc" },
-    take: 200,
-  });
+  return listCampaignAggregates(context);
 }
 
 export async function approveCampaign(context: RequestContext, campaignId: string) {
   requireRole(context, "REVIEWER");
-  const campaign = await db.campaignBrief.findFirst({
+  const aggregate = await db.campaign.findFirst({
     where: { id: campaignId, workspaceId: context.workspaceId },
+    include: { brief: true },
   });
+  const campaign = aggregate?.brief
+    ? aggregate.brief
+    : await db.campaignBrief.findFirst({
+        where: { id: campaignId, workspaceId: context.workspaceId },
+      });
   if (!campaign) throw new ApiError(404, "CAMPAIGN_NOT_FOUND", "The campaign was not found.");
   const offer = campaign.offer && typeof campaign.offer === "object" ? campaign.offer : null;
   if (offer && (!campaign.evidence || typeof campaign.evidence !== "object"))
@@ -94,7 +128,7 @@ export async function approveCampaign(context: RequestContext, campaignId: strin
       "CAMPAIGN_EVIDENCE_REQUIRED",
       "An offer campaign requires evidence before approval.",
     );
-  return db.campaignBrief.update({
+  const updated = await db.campaignBrief.update({
     where: { id: campaign.id },
     data: {
       status: "APPROVED",
@@ -103,6 +137,24 @@ export async function approveCampaign(context: RequestContext, campaignId: strin
       version: { increment: 1 },
     },
   });
+  const campaignAggregate =
+    aggregate ?? (await db.campaign.findUnique({ where: { briefId: campaign.id } }));
+  if (campaignAggregate) {
+    await db.campaign.update({
+      where: { id: campaignAggregate.id },
+      data: { status: "APPROVED", lifecycleStatus: "READY_FOR_REVIEW" },
+    });
+    await db.campaignEvent.create({
+      data: {
+        workspaceId: context.workspaceId,
+        campaignId: campaignAggregate.id,
+        kind: "CAMPAIGN_APPROVED",
+        message: "Campaign brief approved for production.",
+        actorId: context.userId,
+      },
+    });
+  }
+  return updated;
 }
 
 export async function createTemplateDefinition(

@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: creozentic
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d creozentic"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/creozentic?schema=public
+      REDIS_URL: redis://localhost:6379
+      APP_URL: http://127.0.0.1:3000
+      AUTH_SESSION_SECRET: ci-session-secret-with-sufficient-length
+      CONNECTION_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      RUNNER_TOKEN: ci-runner-token
+      S3_ENDPOINT: http://127.0.0.1:9000
+      S3_BUCKET: ci-assets
+      S3_ACCESS_KEY_ID: ci-access-key
+      S3_SECRET_ACCESS_KEY: ci-secret-key
+      CREOZENTIC_RELEASE_MODE: "true"
+      CREATIVE_PROVIDER_URL: http://127.0.0.1:9999/creative
+      TEXT_PROVIDER_URL: http://127.0.0.1:9999/text
+      MEDIA_RENDERER_URL: http://127.0.0.1:9999/render
+      MEDIA_ANALYSIS_PROVIDER_URL: http://127.0.0.1:9999/analysis
+      OCR_PROVIDER_URL: http://127.0.0.1:9999/ocr
+      MASKING_PROVIDER_URL: http://127.0.0.1:9999/masking
+      INTEGRITY_PROVIDER_URL: http://127.0.0.1:9999/integrity
+      MALWARE_SCAN_PROVIDER_URL: http://127.0.0.1:9999/malware
+      MODERATION_PROVIDER_URL: http://127.0.0.1:9999/moderation
+      NEXT_PUBLIC_WORKSPACE_ID: workspace-autozentic-demo
+      NEXT_PUBLIC_USER_ID: user-autozentic-owner
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:deploy && pnpm db:seed
+      - run: pnpm exec oxfmt --check app src prisma tests
+      - run: pnpm exec tsc --noEmit
+      - run: pnpm test:unit
+      - run: pnpm build
+      - name: Run production smoke test
+        run: |
+          pnpm start > /tmp/creozentic-next.log 2>&1 &
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:3000/api/v1/health/ready > /dev/null; then
+              pnpm test:production-smoke
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/creozentic-next.log
+          exit 1

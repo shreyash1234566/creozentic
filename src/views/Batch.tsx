@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { PageHeader, Panel, Btn } from "../ui";
 import { SAMPLE_IMAGES, STYLES, img } from "../data";
 import { useStore } from "../store";
 import type { OutputAsset } from "../domain";
-import { createServerBatch } from "../client/api";
+import { createServerBatch, getServerBatch, retryServerBatchRow } from "../client/api";
 import { uid } from "../domain";
 
 const SEED = `Kadam 3-seater sofa, teak
@@ -20,10 +20,12 @@ const FORMATS = [
 ];
 
 type Row = {
+  id?: string;
   name: string;
   style: string;
   image: string;
-  status: "queued" | "running" | "done";
+  status: string;
+  error?: string;
 };
 
 export default function Batch() {
@@ -42,7 +44,15 @@ export default function Batch() {
   const [formats, setFormats] = useState<string[]>(["feed", "story", "land"]);
   const [rows, setRows] = useState<Row[]>([]);
   const [running, setRunning] = useState(false);
+  const [batchId, setBatchId] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [preflight, setPreflight] = useState<{
+    signature: string;
+    estimate: Record<string, unknown>;
+    errors: Array<{ rowNumber: number; message: string }>;
+  } | null>(null);
+  const [preflightBusy, setPreflightBusy] = useState(false);
+  const [retryingRow, setRetryingRow] = useState<string | null>(null);
 
   const items = text
     .split("\n")
@@ -54,18 +64,111 @@ export default function Batch() {
   const toggleFormat = (id: string) =>
     setFormats((f) => (f.includes(id) ? f.filter((x) => x !== id) : [...f, id]));
 
+  useEffect(() => {
+    if (!backendEnabled || !batchId) return;
+    let active = true;
+    const poll = async () => {
+      try {
+        const batch = await getServerBatch(batchId);
+        if (!active) return;
+        const serverRows = Array.isArray(batch.rows) ? batch.rows : [];
+        setRows(
+          serverRows.map((row, index) => ({
+            id:
+              typeof (row as Record<string, unknown>).id === "string"
+                ? String((row as Record<string, unknown>).id)
+                : undefined,
+            name: String(
+              (row as Record<string, unknown>).sku ?? items[index] ?? `row-${index + 1}`,
+            ),
+            style,
+            image: "",
+            status: String((row as Record<string, unknown>).state ?? "QUEUED").toLowerCase(),
+            error:
+              (row as Record<string, unknown>).error &&
+              typeof (row as Record<string, unknown>).error === "object"
+                ? String(
+                    ((row as Record<string, unknown>).error as Record<string, unknown>).message ??
+                      "",
+                  )
+                : undefined,
+          })),
+        );
+        const state = String(batch.state ?? "");
+        setRunning(["QUEUED", "RUNNING"].includes(state));
+      } catch (reason) {
+        if (active)
+          setError(reason instanceof Error ? reason.message : "Batch status could not be loaded.");
+      }
+    };
+    void poll();
+    const timer = window.setInterval(() => void poll(), 2000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [backendEnabled, batchId, style, text]);
+
   const run = () => {
     if (!items.length || !formats.length) return;
     setError("");
     if (backendEnabled) {
+      const preflightRows = items.map((item) => {
+        const [sku, ...titleParts] = item.split(",").map((part) => part.trim());
+        return { sku, title: titleParts.join(", ") || sku };
+      });
+      const signature = JSON.stringify({ items, style, formats });
+      const briefDefaults = {
+        scene: style,
+        count: 1,
+        mode: "lock",
+        qualityMode: "balanced",
+        outputFormats: formats.map((id) => FORMATS.find((format) => format.id === id)?.ratio ?? id),
+        audience: brand.audience,
+        language: brand.language,
+        cta: "Shop now",
+      };
+      if (!preflight || preflight.signature !== signature) {
+        setPreflightBusy(true);
+        void createServerBatch({
+          title:
+            "Catalogue batch preflight · " +
+            items.length +
+            " SKUs × " +
+            formats.length +
+            " formats",
+          rows: preflightRows,
+          briefDefaults,
+          dryRun: true,
+          idempotencyKey: uid("batch-preflight"),
+        })
+          .then((result) => {
+            const resultRecord = result as {
+              estimate?: Record<string, unknown>;
+              errors?: Array<{ rowNumber: number; message: string }>;
+            };
+            setPreflight({
+              signature,
+              estimate: resultRecord.estimate ?? {},
+              errors: resultRecord.errors ?? [],
+            });
+          })
+          .catch((reason) =>
+            setError(
+              reason instanceof Error ? reason.message : "Preflight could not be completed.",
+            ),
+          )
+          .finally(() => setPreflightBusy(false));
+        return;
+      }
       setRunning(true);
-      const rowsForServer = items.map((item) => {
+      const queueRows = items.map((item) => {
         const [sku, ...titleParts] = item.split(",").map((part) => part.trim());
         return { sku, title: titleParts.join(", ") || sku };
       });
       void createServerBatch({
         title: `Catalogue batch · ${items.length} SKUs × ${formats.length} formats`,
-        rows: rowsForServer,
+        rows: queueRows,
         briefDefaults: {
           scene: style,
           count: 1,
@@ -82,21 +185,30 @@ export default function Batch() {
       })
         .then((result) => {
           const resultRecord = result as {
-            batch?: { rows?: Array<{ sku: string; state: string }> };
+            batch?: {
+              id?: string;
+              rows?: Array<{ id?: string; sku: string; state: string; error?: unknown }>;
+            };
             errors?: Array<{ rowNumber: number; message: string }>;
           };
+          setBatchId(resultRecord.batch?.id ?? null);
           const errors = resultRecord.errors ?? [];
           setRows(
-            items.map((name, index) => ({
-              name,
+            (resultRecord.batch?.rows ?? []).map((row, index) => ({
+              id: row.id,
+              name: row.sku || items[index] || "row-" + (index + 1),
               style,
-              image: backendEnabled ? "" : SAMPLE_IMAGES[index % SAMPLE_IMAGES.length],
-              status: errors.some((item) => item.rowNumber === index + 1) ? "queued" : "running",
+              image: "",
+              status: String(row.state ?? "QUEUED").toLowerCase(),
+              error:
+                row.error && typeof row.error === "object"
+                  ? String((row.error as Record<string, unknown>).message ?? "")
+                  : undefined,
             })),
           );
           if (errors.length > 0)
             setError(errors.map((item) => `Row ${item.rowNumber}: ${item.message}`).join(" "));
-          setRunning(false);
+          setRunning(Boolean(resultRecord.batch?.id));
         })
         .catch((reason) => {
           setRunning(false);
@@ -222,7 +334,26 @@ export default function Batch() {
     );
   };
 
-  const doneCount = rows.filter((r) => r.status === "done").length;
+  const retryRow = async (row: Row) => {
+    if (!backendEnabled || !batchId || !row.id) return;
+    setRetryingRow(row.id);
+    setError("");
+    try {
+      await retryServerBatchRow(batchId, row.id);
+      setRows((current) =>
+        current.map((item) =>
+          item.id === row.id ? { ...item, status: "queued", error: undefined } : item,
+        ),
+      );
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "This row could not be retried.");
+    } finally {
+      setRetryingRow(null);
+    }
+  };
+
+  const doneCount = rows.filter((r) => ["completed", "done"].includes(r.status)).length;
+  const currentSignature = JSON.stringify({ items, style, formats });
 
   return (
     <div className="space-y-8">
@@ -234,7 +365,13 @@ export default function Batch() {
           <Btn onClick={run} disabled={running || !items.length}>
             {running
               ? `Rendering ${doneCount}/${items.length}…`
-              : `Run batch · ${totalCredits} credits`}
+              : backendEnabled
+                ? preflightBusy
+                  ? "Checking products…"
+                  : preflight?.signature === currentSignature
+                    ? `Queue batch · ${totalCredits} credits`
+                    : "Run preflight"
+                : `Run batch · ${totalCredits} credits`}
           </Btn>
         }
       />
@@ -243,6 +380,54 @@ export default function Batch() {
         <div className="rounded-xl border border-saffron-deep bg-saffron-deep/8 px-4 py-3 font-mono text-[11px] text-saffron-deep">
           {error}
         </div>
+      )}
+
+      {backendEnabled && preflight && preflight.signature === currentSignature && (
+        <Panel title="Catalogue preflight · review before queueing">
+          <div className="grid gap-px bg-line sm:grid-cols-4">
+            <div className="bg-card p-4">
+              <div className="font-mono text-[10px] uppercase text-ink-soft">Valid rows</div>
+              <div className="mt-1 font-display text-2xl">
+                {String(preflight.estimate.validRows ?? 0)}
+              </div>
+            </div>
+            <div className="bg-card p-4">
+              <div className="font-mono text-[10px] uppercase text-ink-soft">Blocked rows</div>
+              <div className="mt-1 font-display text-2xl text-saffron-deep">
+                {String(preflight.estimate.failedRows ?? 0)}
+              </div>
+            </div>
+            <div className="bg-card p-4">
+              <div className="font-mono text-[10px] uppercase text-ink-soft">Estimated credits</div>
+              <div className="mt-1 font-display text-2xl">
+                {String(preflight.estimate.credits ?? 0)}
+              </div>
+            </div>
+            <div className="bg-card p-4">
+              <div className="font-mono text-[10px] uppercase text-ink-soft">Estimated time</div>
+              <div className="mt-1 font-display text-2xl">
+                {String(preflight.estimate.etaSec ?? 0)}s
+              </div>
+            </div>
+          </div>
+          <div className="space-y-2 border-t border-line p-4">
+            <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-soft">
+              Row-level recovery
+            </div>
+            {preflight.errors.length === 0 ? (
+              <p className="text-sm text-leaf">All rows have a matching product and valid brief.</p>
+            ) : (
+              preflight.errors.map((item) => (
+                <div
+                  key={item.rowNumber}
+                  className="rounded-lg border border-saffron-deep/30 bg-saffron-deep/5 px-3 py-2 text-sm"
+                >
+                  Row {item.rowNumber}: {item.message}
+                </div>
+              ))
+            )}
+          </div>
+        </Panel>
       )}
 
       <div className="grid gap-6 lg:grid-cols-[320px_1fr]">
@@ -347,6 +532,20 @@ export default function Batch() {
                     >
                       {row.status}
                     </span>
+                    {row.error && (
+                      <div className="mt-1 max-w-md font-mono text-[10px] text-saffron-deep">
+                        {row.error}
+                      </div>
+                    )}
+                    {backendEnabled && row.status === "failed" && row.id && (
+                      <button
+                        onClick={() => void retryRow(row)}
+                        disabled={retryingRow === row.id}
+                        className="ml-2 font-mono text-[10px] uppercase text-saffron-deep underline"
+                      >
+                        {retryingRow === row.id ? "retrying…" : "retry row"}
+                      </button>
+                    )}
                   </div>
                   <div className="flex gap-3">
                     {FORMATS.filter((f) => formats.includes(f.id)).map((f) => (
@@ -354,7 +553,7 @@ export default function Batch() {
                         <div
                           className={`${f.box} overflow-hidden rounded-lg border border-line bg-paper-deep`}
                         >
-                          {row.status === "done" && row.image ? (
+                          {["done", "completed"].includes(row.status) && row.image ? (
                             <img
                               src={img(row.image, 240, 400)}
                               alt={`${row.name} ${f.label}`}
@@ -362,7 +561,7 @@ export default function Batch() {
                             />
                           ) : (
                             <div className="flex h-full items-center justify-center text-center font-mono text-[10px] text-ink-soft">
-                              {backendEnabled && row.status === "done"
+                              {backendEnabled && ["done", "completed"].includes(row.status)
                                 ? "Awaiting signed server output"
                                 : null}
                               {row.status === "running" && (

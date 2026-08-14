@@ -1,15 +1,11 @@
 import { NextResponse } from "next/server";
 import { db } from "../../../../src/server/db";
 import { ApiError, jsonError, requestId } from "../../../../src/server/api";
+import { authenticatedUserId } from "../../../../src/server/auth";
 
 export async function GET(request: Request) {
   try {
-    const userId =
-      request.headers.get("x-user-id") ??
-      (!process.env.NODE_ENV || process.env.NODE_ENV !== "production"
-        ? process.env.DEMO_USER_ID
-        : undefined);
-    if (!userId) throw new ApiError(401, "AUTH_REQUIRED", "A signed-in user is required.");
+    const userId = authenticatedUserId(request);
     const memberships = await db.membership.findMany({
       where: { userId, status: "ACTIVE" },
       include: { workspace: true },
@@ -27,17 +23,7 @@ export async function POST(request: Request) {
   const correlationId = requestId(request);
   try {
     const body = (await request.json()) as Record<string, unknown>;
-    const userId =
-      request.headers.get("x-user-id") ??
-      (!process.env.NODE_ENV || process.env.NODE_ENV !== "production"
-        ? process.env.DEMO_USER_ID
-        : undefined);
-    if (!userId)
-      throw new ApiError(
-        401,
-        "AUTH_REQUIRED",
-        "A signed-in user is required to create a workspace.",
-      );
+    const userId = authenticatedUserId(request);
     const name = typeof body.name === "string" ? body.name.trim() : "";
     const slug = typeof body.slug === "string" ? body.slug.trim().toLowerCase() : "";
     if (!name || !slug) throw new ApiError(400, "INVALID_WORKSPACE", "name and slug are required.");

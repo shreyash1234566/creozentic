@@ -10,6 +10,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { ApiError } from "./api";
+import { isReleaseMode } from "./runtime-config";
 
 export class StorageNotConfiguredError extends ApiError {
   constructor() {
@@ -48,11 +49,14 @@ function hasRemoteStorage() {
 
 export function localStorageEnabled() {
   if (process.env.LOCAL_STORAGE_ENABLED === "true") return true;
-  return process.env.NODE_ENV !== "production" && !hasRemoteStorage();
+  return !isReleaseMode() && process.env.NODE_ENV !== "production" && !hasRemoteStorage();
 }
 
 function localRoot() {
-  return resolve(process.env.LOCAL_STORAGE_ROOT ?? join(process.cwd(), ".data", "objects"));
+  return resolve(
+    /* turbopackIgnore: true */ process.env.LOCAL_STORAGE_ROOT ??
+      join(process.cwd(), ".data", "objects"),
+  );
 }
 
 function localPath(objectKey: string) {
@@ -123,7 +127,7 @@ export async function readLocalObject(objectKey: string) {
   if (!localStorageEnabled()) throw new StorageNotConfiguredError();
   const target = localPath(objectKey);
   const [body, metadata] = await Promise.all([
-    readFile(target),
+    readFile(/* turbopackIgnore: true */ target),
     readFile(`${target}.meta.json`, "utf8").catch(() => "{}"),
   ]);
   let mimeType: string | undefined;

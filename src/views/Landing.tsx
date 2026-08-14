@@ -787,12 +787,8 @@ function LiveGate() {
                 return (
                   <motion.div
                     key={c.dim}
-                    className="flex items-center gap-3 rounded-xl border px-4 py-3"
-                    animate={{
-                      opacity: active ? 1 : 0.35,
-                      borderColor: active ? "var(--color-line)" : "transparent",
-                      backgroundColor: active ? "var(--color-paper)" : "transparent",
-                    }}
+                    className={`flex items-center gap-3 rounded-xl border px-4 py-3 ${active ? "border-line bg-paper" : "border-transparent bg-transparent"}`}
+                    animate={{ opacity: active ? 1 : 0.35 }}
                     transition={{ duration: 0.4 }}
                   >
                     <span

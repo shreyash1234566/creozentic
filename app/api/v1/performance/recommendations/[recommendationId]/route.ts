@@ -17,7 +17,11 @@ export async function PATCH(
       data: await updatePerformanceRecommendation(
         await getRequestContext(request),
         (await params).recommendationId,
-        { status, optOut: typeof body.optOut === "boolean" ? body.optOut : undefined },
+        {
+          status,
+          optOut: typeof body.optOut === "boolean" ? body.optOut : undefined,
+          action: typeof body.action === "string" ? body.action : undefined,
+        },
       ),
     });
   } catch (error) {

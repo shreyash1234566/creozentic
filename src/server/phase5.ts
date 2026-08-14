@@ -6,6 +6,7 @@ import { ApiError } from "./api";
 import { db } from "./db";
 import { requireRole, type RequestContext } from "./auth";
 import { providerApiError, requestProvider } from "./provider-http";
+import { requiresProductionAuthentication } from "./runtime-config";
 
 function json(value: unknown) {
   return value as Prisma.InputJsonValue;
@@ -119,7 +120,7 @@ export async function publishMarketplacePackage(context: RequestContext, package
       "A package cannot be published with provider secrets.",
     );
   const endpoint = process.env.MARKETPLACE_MODERATION_URL;
-  if (!endpoint && process.env.NODE_ENV === "production")
+  if (!endpoint && requiresProductionAuthentication())
     throw new ApiError(
       503,
       "MARKETPLACE_MODERATION_NOT_CONFIGURED",

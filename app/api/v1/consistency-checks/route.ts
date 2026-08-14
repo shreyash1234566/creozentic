@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 import { getRequestContext } from "../../../../src/server/auth";
 import { idempotencyKey, jsonError, ApiError } from "../../../../src/server/api";
-import { listConsistencyChecks, recordConsistencyCheck } from "../../../../src/server/consistency";
+import {
+  evaluateConsistencyCheck,
+  listConsistencyChecks,
+} from "../../../../src/server/consistency";
 
 export async function GET(request: Request) {
   try {
@@ -17,27 +20,19 @@ export async function POST(request: Request) {
   try {
     const context = await getRequestContext(request);
     const body = (await request.json()) as Record<string, unknown>;
-    if (typeof body.referencePackId !== "string" || typeof body.confidence !== "number")
+    if (typeof body.referencePackId !== "string")
       throw new ApiError(
         400,
         "INVALID_CONSISTENCY_CHECK",
-        "referencePackId and numeric confidence are required.",
+        "referencePackId is required; confidence and verdict must come from the vision provider.",
       );
-    const verdict =
-      body.verdict === "PASS" || body.verdict === "WARN" || body.verdict === "CRITICAL"
-        ? body.verdict
-        : undefined;
     return NextResponse.json(
       {
-        data: await recordConsistencyCheck(context, {
+        data: await evaluateConsistencyCheck(context, {
           referencePackId: body.referencePackId,
           runId: typeof body.runId === "string" ? body.runId : undefined,
           outputAssetId: typeof body.outputAssetId === "string" ? body.outputAssetId : undefined,
           sourceAssetId: typeof body.sourceAssetId === "string" ? body.sourceAssetId : undefined,
-          confidence: body.confidence,
-          verdict,
-          drift: body.drift,
-          metadata: body.metadata,
           idempotencyKey: idempotencyKey(request, body.idempotencyKey),
         }),
       },
