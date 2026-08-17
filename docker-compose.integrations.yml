@@ -1,0 +1,30 @@
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    ports: ["4000:4000"]
+    volumes: ["./infrastructure/litellm/config.yaml:/app/config.yaml:ro"]
+  langfuse:
+    image: langfuse/langfuse:latest
+    ports: ["3001:3000"]
+    environment:
+      DATABASE_URL: ${LANGFUSE_DATABASE_URL:-postgresql://creozentic:creozentic@postgres:5432/langfuse}
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-replace-me}
+      SALT: ${LANGFUSE_SALT:-replace-me}
+  growthbook:
+    image: growthbook/growthbook:latest
+    ports: ["3002:3000"]
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    ports: ["9090:9090"]
+    volumes: ["./infrastructure/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+  grafana:
+    image: grafana/grafana:12.1.1
+    ports: ["3003:3000"]
+    volumes: ["grafana-data:/var/lib/grafana"]
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.131.0
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes: ["./infrastructure/observability/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro"]
+volumes:
+  grafana-data:

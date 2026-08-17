@@ -11,6 +11,7 @@ import ModelStudio from "./views/ModelStudio";
 import Batch from "./views/Batch";
 import Composer from "./views/Composer";
 import VideoStudio from "./views/VideoStudio";
+import Editor from "./views/Editor";
 import Localization from "./views/Localization";
 import Consistency from "./views/Consistency";
 import Connectors from "./views/Connectors";
@@ -67,6 +68,14 @@ const NAV: NavItem[] = [
     id: "composer",
     label: "Safe Editor",
     glyph: "⊞",
+    group: "Advanced Studio",
+    minRole: "EDITOR",
+    advanced: true,
+  },
+  {
+    id: "editor",
+    label: "AI Video Editor",
+    glyph: "✂",
     group: "Advanced Studio",
     minRole: "EDITOR",
     advanced: true,
@@ -186,6 +195,8 @@ function Shell({ initialView, onHome }: { initialView: string; onHome: () => voi
         return <Batch />;
       case "composer":
         return <Composer />;
+      case "editor":
+        return <Editor />;
       case "video":
         return <VideoStudio />;
       case "localization":

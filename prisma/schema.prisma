@@ -4,7 +4,6 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 enum WorkspaceStatus {
@@ -262,6 +261,7 @@ model Workspace {
   performanceObservations    PerformanceObservation[]
   calendarEntries            ContentCalendarEntry[]
   agencyWorkItems            AgencyWorkItem[]
+  editorProjects             EditorProject[]
 }
 
 model Membership {
@@ -355,6 +355,7 @@ model Asset {
   scans             AssetScan[]
   analyses          MediaAnalysis[]
   comparisonOutputs ModelComparisonOutput[]
+  editorEvidence    MediaEvidence[]
 
   @@unique([workspaceId, contentHash])
   @@index([workspaceId, type, status])
@@ -418,13 +419,13 @@ model CampaignBrief {
 /// Customer-facing parent for a verified creative outcome. CampaignBrief remains
 /// the original brief record; this aggregate owns the delivery/review/evidence loop.
 model Campaign {
-  id                  String             @id @default(cuid())
+  id                  String              @id @default(cuid())
   workspaceId         String
-  briefId             String             @unique
+  briefId             String              @unique
   name                String
   objective           String
-  status              String             @default("DRAFT")
-  lifecycleStatus     String             @default("NEEDS_INPUT")
+  status              String              @default("DRAFT")
+  lifecycleStatus     String              @default("NEEDS_INPUT")
   briefSnapshot       Json
   brandSnapshot       Json?
   templateSnapshot    Json?
@@ -433,10 +434,10 @@ model Campaign {
   costSnapshot        Json?
   performanceSnapshot Json?
   createdBy           String
-  createdAt           DateTime           @default(now())
-  updatedAt           DateTime           @updatedAt
-  workspace           Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  brief               CampaignBrief      @relation(fields: [briefId], references: [id], onDelete: Cascade)
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+  workspace           Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  brief               CampaignBrief       @relation(fields: [briefId], references: [id], onDelete: Cascade)
   facts               CampaignFact[]
   directions          CampaignDirection[]
   passports           CreativePassport[]
@@ -2289,4 +2290,409 @@ model AgencyWorkItem {
   @@unique([workspaceId, dailyPlanId])
   @@index([workspaceId, status, deadline])
   @@index([workspaceId, brandId, updatedAt])
+}
+
+model EditorProject {
+  id                String             @id @default(cuid())
+  workspaceId       String
+  name              String
+  state             String             @default("DRAFT")
+  objective         String
+  audience          String
+  platform          String
+  constraints       Json
+  references        Json
+  memorySnapshot    Json
+  activePlanVersion Int                @default(0)
+  repairAttempts    Int                @default(0)
+  createdBy         String
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  workspace         Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  evidence          MediaEvidence[]
+  plans             EditPlanVersion[]
+  renders           EditorRender[]
+  evaluations       RenderEvaluation[]
+  iterations        EditIteration[]
+  approvals         EditApproval[]
+  skills            SkillExecution[]
+  relations         EvidenceRelation[]
+  memorySnapshots   MemorySnapshot[]
+  editingMemory     EditingMemory[]
+
+  @@index([workspaceId, state, updatedAt])
+}
+
+model MediaEvidence {
+  id           String               @id @default(cuid())
+  projectId    String
+  assetId      String?
+  kind         String
+  startSec     Float?
+  endSec       Float?
+  transcript   String?
+  confidence   Float?
+  payload      Json
+  createdAt    DateTime             @default(now())
+  project      EditorProject        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  asset        Asset?               @relation(fields: [assetId], references: [id], onDelete: SetNull)
+  frames       EvidenceFrame[]
+  regions      EvidenceRegion[]
+  words        TranscriptWord[]
+  shots        ShotBoundary[]
+  audioWindows AudioFeatureWindow[]
+  entities     DetectedEntity[]
+  ocrRegions   OCRRegion[]
+
+  @@index([projectId, kind, startSec])
+}
+
+model EditPlanVersion {
+  id              String          @id @default(cuid())
+  projectId       String
+  version         Int
+  parentVersionId String?
+  status          String          @default("DRAFT")
+  changeReason    String?
+  changedFields   Json
+  estimatedCost   Int             @default(0)
+  actualCost      Int?
+  modelVersions   Json
+  promptVersions  Json
+  createdAt       DateTime        @default(now())
+  project         EditorProject   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  beats           EditBeat[]
+  hooks           HookCandidate[]
+  visualInserts   VisualInsert[]
+  motionGraphics  MotionGraphic[]
+  audioPlan       AudioPlan?
+  captionPlan     CaptionPlan?
+  narrativeMap    NarrativeMap?
+  visualBible     VisualBible?
+  decisions       EditDecision[]
+
+  @@unique([projectId, version])
+  @@index([projectId, status])
+}
+
+model NarrativeMap {
+  id          String          @id @default(cuid())
+  planId      String          @unique
+  structure   Json
+  evidenceIds Json
+  rationale   String
+  plan        EditPlanVersion @relation(fields: [planId], references: [id], onDelete: Cascade)
+}
+
+model EditDecision {
+  id           String          @id @default(cuid())
+  planId       String
+  beatId       String?
+  decisionType String
+  decision     Json
+  evidenceIds  Json
+  complexity   String
+  createdAt    DateTime        @default(now())
+  plan         EditPlanVersion @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  @@index([planId, decisionType])
+}
+
+model VisualBible {
+  id          String          @id @default(cuid())
+  planId      String          @unique
+  palette     Json
+  typography  Json
+  composition Json
+  motion      Json
+  forbidden   Json
+  plan        EditPlanVersion @relation(fields: [planId], references: [id], onDelete: Cascade)
+}
+
+model EditBeat {
+  id          String          @id @default(cuid())
+  planId      String
+  sequence    Int
+  startSec    Float
+  endSec      Float
+  label       String
+  spokenText  String
+  rationale   String
+  evidenceIds Json
+  transition  String          @default("cut")
+  approved    Boolean         @default(false)
+  plan        EditPlanVersion @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  @@unique([planId, sequence])
+}
+
+model HookCandidate {
+  id          String          @id @default(cuid())
+  planId      String
+  rank        Int
+  text        String
+  rationale   String
+  evidenceIds Json
+  locked      Boolean         @default(false)
+  plan        EditPlanVersion @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  @@index([planId, rank])
+}
+
+model VisualInsert {
+  id             String          @id @default(cuid())
+  planId         String
+  beatId         String?
+  sourceStrategy String
+  assetSource    String?
+  prompt         String?
+  motionRecipe   Json
+  factuality     String          @default("UNVERIFIED")
+  approvalState  String          @default("PENDING")
+  fallback       String?
+  plan           EditPlanVersion @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  @@index([planId, approvalState])
+}
+
+model MotionGraphic {
+  id           String          @id @default(cuid())
+  planId       String
+  beatId       String?
+  kind         String
+  parameters   Json
+  styleVersion String
+  plan         EditPlanVersion @relation(fields: [planId], references: [id], onDelete: Cascade)
+}
+
+model AudioPlan {
+  id      String          @id @default(cuid())
+  planId  String          @unique
+  ducking Json
+  music   Json
+  voice   Json
+  plan    EditPlanVersion @relation(fields: [planId], references: [id], onDelete: Cascade)
+}
+
+model CaptionPlan {
+  id       String          @id @default(cuid())
+  planId   String          @unique
+  style    Json
+  safeZone Json
+  segments Json
+  plan     EditPlanVersion @relation(fields: [planId], references: [id], onDelete: Cascade)
+}
+
+model EditorRender {
+  id                   String             @id @default(cuid())
+  projectId            String
+  planVersion          Int
+  status               String             @default("QUEUED")
+  outputAssetId        String?
+  sourceAssetChecksums Json
+  promptVersions       Json
+  modelVersions        Json
+  providerIds          Json
+  rendererVersion      String
+  fontStyleVersions    Json
+  qaVersion            String
+  createdAt            DateTime           @default(now())
+  completedAt          DateTime?
+  project              EditorProject      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  evaluations          RenderEvaluation[]
+
+  @@index([projectId, createdAt])
+}
+
+model RenderEvaluation {
+  id        String            @id @default(cuid())
+  projectId String
+  renderId  String
+  verdict   String
+  score     Float
+  summary   String
+  createdAt DateTime          @default(now())
+  project   EditorProject     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  render    EditorRender      @relation(fields: [renderId], references: [id], onDelete: Cascade)
+  issues    EvaluationIssue[]
+
+  @@index([projectId, verdict, createdAt])
+}
+
+model EvaluationIssue {
+  id                String           @id @default(cuid())
+  evaluationId      String
+  issueCode         String
+  severity          String
+  beatId            String?
+  sourceEvidenceIds Json
+  confidence        Float
+  explanation       String
+  proposedFix       String
+  evaluation        RenderEvaluation @relation(fields: [evaluationId], references: [id], onDelete: Cascade)
+
+  @@index([evaluationId, severity])
+}
+
+model EditIteration {
+  id          String        @id @default(cuid())
+  projectId   String
+  iteration   Int
+  scope       Json
+  reason      String
+  preserve    Json
+  fixStrategy String
+  status      String        @default("REQUESTED")
+  createdAt   DateTime      @default(now())
+  project     EditorProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, iteration])
+}
+
+model EditApproval {
+  id          String        @id @default(cuid())
+  projectId   String
+  planVersion Int
+  decision    String
+  note        String?
+  approvedBy  String
+  createdAt   DateTime      @default(now())
+  project     EditorProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, createdAt])
+}
+
+model SkillDefinition {
+  id                 String           @id @default(cuid())
+  skillId            String           @unique
+  name               String
+  version            Int
+  inputSchema        Json
+  outputSchema       Json
+  promptTemplateId   String
+  allowedTools       Json
+  evaluationCriteria Json
+  status             String           @default("ACTIVE")
+  executions         SkillExecution[]
+}
+
+model SkillExecution {
+  id          String          @id @default(cuid())
+  projectId   String
+  skillId     String
+  status      String          @default("QUEUED")
+  input       Json
+  output      Json?
+  latencyMs   Int?
+  costCredits Int             @default(0)
+  createdAt   DateTime        @default(now())
+  project     EditorProject   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  skill       SkillDefinition @relation(fields: [skillId], references: [skillId], onDelete: Restrict)
+
+  @@index([projectId, createdAt])
+}
+
+model EvidenceRelation {
+  id         String        @id @default(cuid())
+  projectId  String
+  fromId     String
+  toId       String
+  relation   String
+  confidence Float?
+  project    EditorProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, relation])
+}
+
+model EvidenceFrame {
+  id         String        @id @default(cuid())
+  evidenceId String
+  frameSec   Float
+  imageKey   String?
+  metadata   Json
+  evidence   MediaEvidence @relation(fields: [evidenceId], references: [id], onDelete: Cascade)
+}
+
+model EvidenceRegion {
+  id         String        @id @default(cuid())
+  evidenceId String
+  label      String
+  x          Float
+  y          Float
+  width      Float
+  height     Float
+  evidence   MediaEvidence @relation(fields: [evidenceId], references: [id], onDelete: Cascade)
+}
+
+model TranscriptWord {
+  id         String        @id @default(cuid())
+  evidenceId String
+  word       String
+  startSec   Float
+  endSec     Float
+  confidence Float?
+  evidence   MediaEvidence @relation(fields: [evidenceId], references: [id], onDelete: Cascade)
+
+  @@index([evidenceId, startSec])
+}
+
+model ShotBoundary {
+  id         String        @id @default(cuid())
+  evidenceId String
+  startSec   Float
+  endSec     Float
+  confidence Float?
+  evidence   MediaEvidence @relation(fields: [evidenceId], references: [id], onDelete: Cascade)
+}
+
+model AudioFeatureWindow {
+  id         String        @id @default(cuid())
+  evidenceId String
+  startSec   Float
+  endSec     Float
+  features   Json
+  evidence   MediaEvidence @relation(fields: [evidenceId], references: [id], onDelete: Cascade)
+}
+
+model DetectedEntity {
+  id         String        @id @default(cuid())
+  evidenceId String
+  label      String
+  confidence Float
+  region     Json?
+  evidence   MediaEvidence @relation(fields: [evidenceId], references: [id], onDelete: Cascade)
+}
+
+model OCRRegion {
+  id         String        @id @default(cuid())
+  evidenceId String
+  text       String
+  confidence Float
+  region     Json
+  evidence   MediaEvidence @relation(fields: [evidenceId], references: [id], onDelete: Cascade)
+}
+
+model MemorySnapshot {
+  id        String        @id @default(cuid())
+  projectId String
+  version   Int
+  snapshot  Json
+  createdAt DateTime      @default(now())
+  project   EditorProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, version])
+}
+
+model EditingMemory {
+  id         String        @id @default(cuid())
+  projectId  String
+  category   String
+  key        String
+  value      Json
+  confidence Float?
+  source     String
+  createdAt  DateTime      @default(now())
+  project    EditorProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, category])
 }

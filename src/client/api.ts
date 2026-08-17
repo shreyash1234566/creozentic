@@ -1099,3 +1099,50 @@ export async function deleteServerCustomModel(projectId: string) {
     body: "{}",
   });
 }
+
+export type EditorProject = Record<string, unknown> & {
+  id: string;
+  state: string;
+  activePlanVersion: number;
+};
+export async function createEditorProject(input: {
+  name: string;
+  objective: string;
+  audience: string;
+  platform: string;
+  constraints?: Record<string, unknown>;
+  references?: unknown[];
+  memorySnapshot?: Record<string, unknown>;
+  idempotencyKey: string;
+}) {
+  return request<EditorProject>("/api/editor/projects", {
+    method: "POST",
+    headers: { "idempotency-key": input.idempotencyKey },
+    body: JSON.stringify(input),
+  });
+}
+export async function getEditorProject(projectId: string) {
+  return request<EditorProject>(`/api/editor/projects/${projectId}`);
+}
+export async function analyzeEditorProject(projectId: string, assetIds: string[]) {
+  return request<Record<string, unknown>>(`/api/editor/projects/${projectId}/analyze`, {
+    method: "POST",
+    body: JSON.stringify({ assetIds }),
+  });
+}
+export async function planEditorProject(projectId: string) {
+  return request<Record<string, unknown>>(`/api/editor/projects/${projectId}/plan`, {
+    method: "POST",
+    body: "{}",
+  });
+}
+export async function editorAction(
+  projectId: string,
+  action: string,
+  body: Record<string, unknown> = {},
+) {
+  return request<Record<string, unknown>>(`/api/editor/projects/${projectId}/${action}`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
