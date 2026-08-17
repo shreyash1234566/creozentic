@@ -1,6 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: "standalone",
+  allowedDevOrigins: ["3000-idjilin3yot1plwvtj9w0-1b69fec6.us3.manus.computer"],
   async headers() {
     return [
       {
