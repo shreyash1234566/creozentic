@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -54,11 +54,13 @@ jobs:
           version: 11
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm guide:check
       - run: pnpm db:deploy && pnpm db:seed
-      - run: pnpm exec oxfmt --check app src prisma tests
+      - run: pnpm exec prisma validate
+      - run: pnpm exec oxfmt --check app src packages apps tests prisma infrastructure
       - run: pnpm exec tsc --noEmit
       - run: pnpm test:unit
       - run: pnpm build
