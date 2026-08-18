@@ -26,6 +26,7 @@ import Landing from "./views/Landing";
 import DailyAutopilot from "./views/DailyAutopilot";
 import Campaigns from "./views/Campaigns";
 import CreateCampaign from "./views/CreateCampaign";
+import PlatformServices from "./views/PlatformServices";
 
 type Role =
   | "OWNER"
@@ -64,6 +65,7 @@ const NAV: NavItem[] = [
   { id: "brand", label: "Brand Brain", glyph: "❖", group: "Control" },
   { id: "performance", label: "Results", glyph: "◭", group: "Control" },
   { id: "connectors", label: "Automation", glyph: "⇄", group: "Control", minRole: "EDITOR" },
+  { id: "platform", label: "Platform Services", glyph: "⌁", group: "Control", minRole: "EDITOR" },
   {
     id: "composer",
     label: "Safe Editor",
@@ -205,6 +207,8 @@ function Shell({ initialView, onHome }: { initialView: string; onHome: () => voi
         return <Consistency />;
       case "connectors":
         return <Connectors />;
+      case "platform":
+        return <PlatformServices />;
       case "scheduler":
         return <Scheduler />;
       case "performance":

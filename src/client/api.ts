@@ -1146,3 +1146,14 @@ export async function editorAction(
     body: JSON.stringify(body),
   });
 }
+
+export type PlatformIntegrationKind = "experiment" | "notification" | "billing" | "webhook";
+export async function runPlatformIntegration(
+  kind: PlatformIntegrationKind,
+  input: Record<string, unknown>,
+) {
+  return request<Record<string, unknown>>(`/api/v1/integrations/${kind}`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
