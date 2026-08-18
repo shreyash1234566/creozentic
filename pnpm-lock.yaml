@@ -132,6 +132,9 @@ importers:
 
   apps/worker:
     dependencies:
+      '@creozentic/video':
+        specifier: workspace:*
+        version: link:../../packages/video
       bullmq:
         specifier: ^6.0.11
         version: 6.0.11(ioredis@6.0.0)(pg@8.23.0)
@@ -155,6 +158,8 @@ importers:
       zod:
         specifier: ^4.4.3
         version: 4.4.3
+
+  packages/video: {}
 
 packages:
 

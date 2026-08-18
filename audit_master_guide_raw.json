@@ -6,10 +6,7 @@
       "number": "0",
       "title": "Decision rule",
       "line": 26,
-      "tokens": [
-        "decision",
-        "rule"
-      ],
+      "tokens": ["decision", "rule"],
       "evidence": [
         {
           "file": "prisma/migrations/00000000000000_initial/migration.sql",
@@ -65,11 +62,7 @@
       "number": "1",
       "title": "Final technology decisions",
       "line": 50,
-      "tokens": [
-        "final",
-        "technology",
-        "decisions"
-      ],
+      "tokens": ["final", "technology", "decisions"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -125,9 +118,7 @@
       "number": "1.1",
       "title": "Application",
       "line": 55,
-      "tokens": [
-        "application"
-      ],
+      "tokens": ["application"],
       "evidence": [
         {
           "file": "AGENTS.md",
@@ -183,18 +174,14 @@
       "number": "2",
       "title": "High-level architecture",
       "line": 239,
-      "tokens": [
-        "high-level"
-      ],
+      "tokens": ["high-level"],
       "evidence": []
     },
     {
       "number": "3",
       "title": "Repository architecture",
       "line": 303,
-      "tokens": [
-        "repository"
-      ],
+      "tokens": ["repository"],
       "evidence": [
         {
           "file": "AGENTS.md",
@@ -218,9 +205,7 @@
       "number": "4",
       "title": "Domain model",
       "line": 362,
-      "tokens": [
-        "domain"
-      ],
+      "tokens": ["domain"],
       "evidence": [
         {
           "file": "app/api/v1/capabilities/route.ts",
@@ -276,10 +261,7 @@
       "number": "5",
       "title": "Database schema",
       "line": 396,
-      "tokens": [
-        "database",
-        "schema"
-      ],
+      "tokens": ["database", "schema"],
       "evidence": [
         {
           "file": ".github/workflows/ci.yml",
@@ -335,10 +317,7 @@
       "number": "6",
       "title": "Important database rules",
       "line": 529,
-      "tokens": [
-        "important",
-        "database"
-      ],
+      "tokens": ["important", "database"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -401,9 +380,7 @@
       "number": "6.2",
       "title": "Timestamps",
       "line": 537,
-      "tokens": [
-        "timestamps"
-      ],
+      "tokens": ["timestamps"],
       "evidence": [
         {
           "file": "docs/production-operations.md",
@@ -427,10 +404,7 @@
       "number": "6.3",
       "title": "Soft deletion",
       "line": 546,
-      "tokens": [
-        "soft",
-        "deletion"
-      ],
+      "tokens": ["soft", "deletion"],
       "evidence": [
         {
           "file": "prisma/schema.prisma",
@@ -486,10 +460,7 @@
       "number": "6.4",
       "title": "Tenant isolation",
       "line": 554,
-      "tokens": [
-        "tenant",
-        "isolation"
-      ],
+      "tokens": ["tenant", "isolation"],
       "evidence": [
         {
           "file": "docs/production-operations.md",
@@ -541,18 +512,14 @@
       "number": "6.5",
       "title": "Indexing",
       "line": 562,
-      "tokens": [
-        "indexing"
-      ],
+      "tokens": ["indexing"],
       "evidence": []
     },
     {
       "number": "7",
       "title": "Storage architecture",
       "line": 589,
-      "tokens": [
-        "storage"
-      ],
+      "tokens": ["storage"],
       "evidence": [
         {
           "file": "README.md",
@@ -608,10 +575,7 @@
       "number": "8",
       "title": "Upload flow",
       "line": 618,
-      "tokens": [
-        "upload",
-        "flow"
-      ],
+      "tokens": ["upload", "flow"],
       "evidence": [
         {
           "file": "prisma/migrations/00000000000000_initial/migration.sql",
@@ -667,11 +631,7 @@
       "number": "9",
       "title": "Media ingestion pipeline",
       "line": 637,
-      "tokens": [
-        "media",
-        "ingestion",
-        "pipeline"
-      ],
+      "tokens": ["media", "ingestion", "pipeline"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/ai-creative-plan.md",
@@ -727,10 +687,7 @@
       "number": "10",
       "title": "AI Video Editor \u2014 Editing Director Architecture",
       "line": 684,
-      "tokens": [
-        "editing",
-        "director"
-      ],
+      "tokens": ["editing", "director"],
       "evidence": [
         {
           "file": "src/server/editor.ts",
@@ -786,9 +743,7 @@
       "number": "10.1",
       "title": "Product model",
       "line": 739,
-      "tokens": [
-        "product"
-      ],
+      "tokens": ["product"],
       "evidence": [
         {
           "file": ".github/workflows/ci.yml",
@@ -844,10 +799,7 @@
       "number": "10.2",
       "title": "Evidence-first understanding",
       "line": 756,
-      "tokens": [
-        "evidence-first",
-        "understanding"
-      ],
+      "tokens": ["evidence-first", "understanding"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/ai-creative-plan.md",
@@ -867,12 +819,7 @@
       "number": "10.3",
       "title": "Evidence graph and analysis storage",
       "line": 808,
-      "tokens": [
-        "evidence",
-        "graph",
-        "analysis",
-        "storage"
-      ],
+      "tokens": ["evidence", "graph", "analysis", "storage"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -928,10 +875,7 @@
       "number": "10.4",
       "title": "Four-layer memory architecture",
       "line": 843,
-      "tokens": [
-        "four-layer",
-        "memory"
-      ],
+      "tokens": ["four-layer", "memory"],
       "evidence": [
         {
           "file": "prisma/migrations/20260818000100_ai_video_editor/migration.sql",
@@ -987,11 +931,7 @@
       "number": "10.5",
       "title": "Memory retrieval contract",
       "line": 930,
-      "tokens": [
-        "memory",
-        "retrieval",
-        "contract"
-      ],
+      "tokens": ["memory", "retrieval", "contract"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -1047,11 +987,7 @@
       "number": "10.6",
       "title": "Editing Director contract",
       "line": 970,
-      "tokens": [
-        "editing",
-        "director",
-        "contract"
-      ],
+      "tokens": ["editing", "director", "contract"],
       "evidence": [
         {
           "file": "src/server/editor.ts",
@@ -1107,10 +1043,7 @@
       "number": "10.7",
       "title": "Hook candidates",
       "line": 1018,
-      "tokens": [
-        "hook",
-        "candidates"
-      ],
+      "tokens": ["hook", "candidates"],
       "evidence": [
         {
           "file": "src/server/connectors.ts",
@@ -1166,9 +1099,7 @@
       "number": "10.8",
       "title": "Narrative map",
       "line": 1041,
-      "tokens": [
-        "narrative"
-      ],
+      "tokens": ["narrative"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -1188,11 +1119,7 @@
       "number": "10.9",
       "title": "Edit Decision List",
       "line": 1062,
-      "tokens": [
-        "edit",
-        "decision",
-        "list"
-      ],
+      "tokens": ["edit", "decision", "list"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -1248,10 +1175,7 @@
       "number": "10.10",
       "title": "Visual Bible",
       "line": 1098,
-      "tokens": [
-        "visual",
-        "bible"
-      ],
+      "tokens": ["visual", "bible"],
       "evidence": [
         {
           "file": "README.md",
@@ -1307,11 +1231,7 @@
       "number": "10.11",
       "title": "B-roll selection hierarchy",
       "line": 1122,
-      "tokens": [
-        "b-roll",
-        "selection",
-        "hierarchy"
-      ],
+      "tokens": ["b-roll", "selection", "hierarchy"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -1367,12 +1287,7 @@
       "number": "10.12",
       "title": "Visual insert decision contract",
       "line": 1140,
-      "tokens": [
-        "visual",
-        "insert",
-        "decision",
-        "contract"
-      ],
+      "tokens": ["visual", "insert", "decision", "contract"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -1428,10 +1343,7 @@
       "number": "10.13",
       "title": "Motion graphics architecture",
       "line": 1177,
-      "tokens": [
-        "motion",
-        "graphics"
-      ],
+      "tokens": ["motion", "graphics"],
       "evidence": [
         {
           "file": "prisma/schema.prisma",
@@ -1487,11 +1399,7 @@
       "number": "10.14",
       "title": "Motion graphic schema",
       "line": 1201,
-      "tokens": [
-        "motion",
-        "graphic",
-        "schema"
-      ],
+      "tokens": ["motion", "graphic", "schema"],
       "evidence": [
         {
           "file": "prisma/migrations/20260818000100_ai_video_editor/migration.sql",
@@ -1547,10 +1455,7 @@
       "number": "10.15",
       "title": "Storyboard stage",
       "line": 1225,
-      "tokens": [
-        "storyboard",
-        "stage"
-      ],
+      "tokens": ["storyboard", "stage"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -1606,11 +1511,7 @@
       "number": "10.16",
       "title": "Human approval checkpoints",
       "line": 1246,
-      "tokens": [
-        "human",
-        "approval",
-        "checkpoints"
-      ],
+      "tokens": ["human", "approval", "checkpoints"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -1666,10 +1567,7 @@
       "number": "10.17",
       "title": "Deterministic renderer",
       "line": 1271,
-      "tokens": [
-        "deterministic",
-        "renderer"
-      ],
+      "tokens": ["deterministic", "renderer"],
       "evidence": [
         {
           "file": "docs/production-operations.md",
@@ -1725,10 +1623,7 @@
       "number": "10.18",
       "title": "Render provenance",
       "line": 1309,
-      "tokens": [
-        "render",
-        "provenance"
-      ],
+      "tokens": ["render", "provenance"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -1784,11 +1679,7 @@
       "number": "10.19",
       "title": "Automated quality evaluation",
       "line": 1332,
-      "tokens": [
-        "automated",
-        "quality",
-        "evaluation"
-      ],
+      "tokens": ["automated", "quality", "evaluation"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -1844,10 +1735,7 @@
       "number": "10.20",
       "title": "Quality judge architecture",
       "line": 1385,
-      "tokens": [
-        "quality",
-        "judge"
-      ],
+      "tokens": ["quality", "judge"],
       "evidence": [
         {
           "file": "src/server/editor.ts",
@@ -1903,10 +1791,7 @@
       "number": "10.21",
       "title": "Surgical iteration",
       "line": 1410,
-      "tokens": [
-        "surgical",
-        "iteration"
-      ],
+      "tokens": ["surgical", "iteration"],
       "evidence": [
         {
           "file": "app/api/editor/projects/[projectId]/[...segments]/route.ts",
@@ -1934,11 +1819,7 @@
       "number": "10.22",
       "title": "Automatic repair limit",
       "line": 1443,
-      "tokens": [
-        "automatic",
-        "repair",
-        "limit"
-      ],
+      "tokens": ["automatic", "repair", "limit"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -1994,10 +1875,7 @@
       "number": "10.23",
       "title": "Edit versioning",
       "line": 1458,
-      "tokens": [
-        "edit",
-        "versioning"
-      ],
+      "tokens": ["edit", "versioning"],
       "evidence": [
         {
           "file": "src/data.ts",
@@ -2053,10 +1931,7 @@
       "number": "10.24",
       "title": "Edit diff",
       "line": 1484,
-      "tokens": [
-        "edit",
-        "diff"
-      ],
+      "tokens": ["edit", "diff"],
       "evidence": [
         {
           "file": "prisma/migrations/20260813124529_daily_creative_autopilot/migration.sql",
@@ -2112,9 +1987,7 @@
       "number": "10.25",
       "title": "Skills architecture",
       "line": 1506,
-      "tokens": [
-        "skills"
-      ],
+      "tokens": ["skills"],
       "evidence": [
         {
           "file": "prisma/schema.prisma",
@@ -2126,10 +1999,7 @@
       "number": "10.26",
       "title": "Skill evaluation",
       "line": 1547,
-      "tokens": [
-        "skill",
-        "evaluation"
-      ],
+      "tokens": ["skill", "evaluation"],
       "evidence": [
         {
           "file": "prisma/migrations/20260818000100_ai_video_editor/migration.sql",
@@ -2192,9 +2062,7 @@
       "number": "10.28",
       "title": "AI Video Editor API contracts",
       "line": 1620,
-      "tokens": [
-        "contracts"
-      ],
+      "tokens": ["contracts"],
       "evidence": [
         {
           "file": "README.md",
@@ -2226,11 +2094,7 @@
       "number": "10.29",
       "title": "Editor project state machine",
       "line": 1646,
-      "tokens": [
-        "project",
-        "state",
-        "machine"
-      ],
+      "tokens": ["project", "state", "machine"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -2286,19 +2150,14 @@
       "number": "10.30",
       "title": "Editor-specific data model additions",
       "line": 1688,
-      "tokens": [
-        "editor-specific",
-        "additions"
-      ],
+      "tokens": ["editor-specific", "additions"],
       "evidence": []
     },
     {
       "number": "10.31",
       "title": "AI Video Editor prompt architecture",
       "line": 1746,
-      "tokens": [
-        "prompt"
-      ],
+      "tokens": ["prompt"],
       "evidence": [
         {
           "file": "app/api/v1/comparisons/route.ts",
@@ -2354,11 +2213,7 @@
       "number": "10.32",
       "title": "Director prompt contract",
       "line": 1771,
-      "tokens": [
-        "director",
-        "prompt",
-        "contract"
-      ],
+      "tokens": ["director", "prompt", "contract"],
       "evidence": [
         {
           "file": "src/server/editor.ts",
@@ -2414,11 +2269,7 @@
       "number": "10.33",
       "title": "Repair prompt contract",
       "line": 1795,
-      "tokens": [
-        "repair",
-        "prompt",
-        "contract"
-      ],
+      "tokens": ["repair", "prompt", "contract"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -2474,11 +2325,7 @@
       "number": "10.34",
       "title": "First-pass quality objective",
       "line": 1815,
-      "tokens": [
-        "first-pass",
-        "quality",
-        "objective"
-      ],
+      "tokens": ["first-pass", "quality", "objective"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -2534,10 +2381,7 @@
       "number": "10.35",
       "title": "Benchmarking requirement",
       "line": 1836,
-      "tokens": [
-        "benchmarking",
-        "requirement"
-      ],
+      "tokens": ["benchmarking", "requirement"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -2557,10 +2401,7 @@
       "number": "10.36",
       "title": "Autonomy gates",
       "line": 1856,
-      "tokens": [
-        "autonomy",
-        "gates"
-      ],
+      "tokens": ["autonomy", "gates"],
       "evidence": [
         {
           "file": "docs/production-operations.md",
@@ -2616,10 +2457,7 @@
       "number": "10.37",
       "title": "Failure handling",
       "line": 1884,
-      "tokens": [
-        "failure",
-        "handling"
-      ],
+      "tokens": ["failure", "handling"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -2675,10 +2513,7 @@
       "number": "10.38",
       "title": "Cost accounting",
       "line": 1919,
-      "tokens": [
-        "cost",
-        "accounting"
-      ],
+      "tokens": ["cost", "accounting"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -2734,11 +2569,7 @@
       "number": "10.39",
       "title": "Integration with the platform learning loop",
       "line": 1937,
-      "tokens": [
-        "integration",
-        "learning",
-        "loop"
-      ],
+      "tokens": ["integration", "learning", "loop"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -2794,11 +2625,7 @@
       "number": "10.40",
       "title": "Definition of production-ready editing",
       "line": 1969,
-      "tokens": [
-        "definition",
-        "production-ready",
-        "editing"
-      ],
+      "tokens": ["definition", "production-ready", "editing"],
       "evidence": [
         {
           "file": "prisma/migrations/20260818000100_ai_video_editor/migration.sql",
@@ -2854,10 +2681,7 @@
       "number": "10A",
       "title": "Repurposing engine",
       "line": 1991,
-      "tokens": [
-        "repurposing",
-        "engine"
-      ],
+      "tokens": ["repurposing", "engine"],
       "evidence": [
         {
           "file": "pnpm-lock.yaml",
@@ -2905,10 +2729,7 @@
       "number": "10B",
       "title": "Content generation engine",
       "line": 2055,
-      "tokens": [
-        "generation",
-        "engine"
-      ],
+      "tokens": ["generation", "engine"],
       "evidence": [
         {
           "file": "src/data.ts",
@@ -2964,9 +2785,7 @@
       "number": "12",
       "title": "AI Gateway",
       "line": 2090,
-      "tokens": [
-        "gateway"
-      ],
+      "tokens": ["gateway"],
       "evidence": [
         {
           "file": "app/api/v1/capabilities/route.ts",
@@ -3010,10 +2829,7 @@
       "number": "13",
       "title": "AI routing policy",
       "line": 2119,
-      "tokens": [
-        "routing",
-        "policy"
-      ],
+      "tokens": ["routing", "policy"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/ai-creative-plan.md",
@@ -3069,10 +2885,7 @@
       "number": "14",
       "title": "AI budget router",
       "line": 2151,
-      "tokens": [
-        "budget",
-        "router"
-      ],
+      "tokens": ["budget", "router"],
       "evidence": [
         {
           "file": "src/data.ts",
@@ -3128,10 +2941,7 @@
       "number": "15",
       "title": "Prompt management",
       "line": 2184,
-      "tokens": [
-        "prompt",
-        "management"
-      ],
+      "tokens": ["prompt", "management"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/ai-creative-plan.md",
@@ -3187,9 +2997,7 @@
       "number": "16",
       "title": "Global AI rules",
       "line": 2213,
-      "tokens": [
-        "global"
-      ],
+      "tokens": ["global"],
       "evidence": [
         {
           "file": "AGENTS.md",
@@ -3221,10 +3029,7 @@
       "number": "17",
       "title": "Planner prompt",
       "line": 2233,
-      "tokens": [
-        "planner",
-        "prompt"
-      ],
+      "tokens": ["planner", "prompt"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -3280,11 +3085,7 @@
       "number": "18",
       "title": "Script generation prompt",
       "line": 2296,
-      "tokens": [
-        "script",
-        "generation",
-        "prompt"
-      ],
+      "tokens": ["script", "generation", "prompt"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/ai-creative-plan.md",
@@ -3340,9 +3141,7 @@
       "number": "19",
       "title": "Video QA prompt",
       "line": 2325,
-      "tokens": [
-        "prompt"
-      ],
+      "tokens": ["prompt"],
       "evidence": [
         {
           "file": "app/api/v1/comparisons/route.ts",
@@ -3398,10 +3197,7 @@
       "number": "20",
       "title": "Video generation gateway",
       "line": 2362,
-      "tokens": [
-        "generation",
-        "gateway"
-      ],
+      "tokens": ["generation", "gateway"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/ai-creative-plan.md",
@@ -3457,10 +3253,7 @@
       "number": "21",
       "title": "Video cost router",
       "line": 2399,
-      "tokens": [
-        "cost",
-        "router"
-      ],
+      "tokens": ["cost", "router"],
       "evidence": [
         {
           "file": "src/data.ts",
@@ -3516,19 +3309,14 @@
       "number": "22",
       "title": "Vertical-pack architecture",
       "line": 2421,
-      "tokens": [
-        "vertical-pack"
-      ],
+      "tokens": ["vertical-pack"],
       "evidence": []
     },
     {
       "number": "23",
       "title": "Brand memory",
       "line": 2466,
-      "tokens": [
-        "brand",
-        "memory"
-      ],
+      "tokens": ["brand", "memory"],
       "evidence": [
         {
           "file": "prisma/schema.prisma",
@@ -3591,10 +3379,7 @@
       "number": "25",
       "title": "Social integration architecture",
       "line": 2533,
-      "tokens": [
-        "social",
-        "integration"
-      ],
+      "tokens": ["social", "integration"],
       "evidence": [
         {
           "file": "prisma/seed.ts",
@@ -3642,9 +3427,7 @@
       "number": "26",
       "title": "OAuth rules",
       "line": 2565,
-      "tokens": [
-        "oauth"
-      ],
+      "tokens": ["oauth"],
       "evidence": [
         {
           "file": "app/api/v1/connections/[provider]/oauth/callback/route.ts",
@@ -3700,11 +3483,7 @@
       "number": "27",
       "title": "Publishing state machine",
       "line": 2595,
-      "tokens": [
-        "publishing",
-        "state",
-        "machine"
-      ],
+      "tokens": ["publishing", "state", "machine"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -3760,10 +3539,7 @@
       "number": "28",
       "title": "Idempotent publishing",
       "line": 2620,
-      "tokens": [
-        "idempotent",
-        "publishing"
-      ],
+      "tokens": ["idempotent", "publishing"],
       "evidence": [
         {
           "file": "src/data.ts",
@@ -3819,10 +3595,7 @@
       "number": "29",
       "title": "Analytics ingestion",
       "line": 2639,
-      "tokens": [
-        "analytics",
-        "ingestion"
-      ],
+      "tokens": ["analytics", "ingestion"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -3838,10 +3611,7 @@
       "number": "30",
       "title": "Analytics normalization",
       "line": 2668,
-      "tokens": [
-        "analytics",
-        "normalization"
-      ],
+      "tokens": ["analytics", "normalization"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -3857,10 +3627,7 @@
       "number": "31",
       "title": "Performance scoring",
       "line": 2699,
-      "tokens": [
-        "performance",
-        "scoring"
-      ],
+      "tokens": ["performance", "scoring"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -3916,10 +3683,7 @@
       "number": "32",
       "title": "Strategy learning",
       "line": 2732,
-      "tokens": [
-        "strategy",
-        "learning"
-      ],
+      "tokens": ["strategy", "learning"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -3975,10 +3739,7 @@
       "number": "33",
       "title": "Experiment framework",
       "line": 2776,
-      "tokens": [
-        "experiment",
-        "framework"
-      ],
+      "tokens": ["experiment", "framework"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/ai-creative-plan.md",
@@ -3998,10 +3759,7 @@
       "number": "34",
       "title": "Content planning cadence",
       "line": 2807,
-      "tokens": [
-        "planning",
-        "cadence"
-      ],
+      "tokens": ["planning", "cadence"],
       "evidence": [
         {
           "file": "app/api/v1/schedules/route.ts",
@@ -4053,10 +3811,7 @@
       "number": "35",
       "title": "Approval modes",
       "line": 2825,
-      "tokens": [
-        "approval",
-        "modes"
-      ],
+      "tokens": ["approval", "modes"],
       "evidence": [
         {
           "file": "app/api/v1/brands/route.ts",
@@ -4112,11 +3867,7 @@
       "number": "36",
       "title": "Safety and content policy layer",
       "line": 2845,
-      "tokens": [
-        "safety",
-        "policy",
-        "layer"
-      ],
+      "tokens": ["safety", "policy", "layer"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/ai-creative-plan.md",
@@ -4172,10 +3923,7 @@
       "number": "37",
       "title": "Copyright and rights model",
       "line": 2872,
-      "tokens": [
-        "copyright",
-        "rights"
-      ],
+      "tokens": ["copyright", "rights"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -4238,9 +3986,7 @@
       "number": "39",
       "title": "Retry rules",
       "line": 2933,
-      "tokens": [
-        "retry"
-      ],
+      "tokens": ["retry"],
       "evidence": [
         {
           "file": "app/api/v1/batches/[batchId]/rows/[rowId]/retry/route.ts",
@@ -4296,10 +4042,7 @@
       "number": "40",
       "title": "Outbox pattern",
       "line": 2972,
-      "tokens": [
-        "outbox",
-        "pattern"
-      ],
+      "tokens": ["outbox", "pattern"],
       "evidence": [
         {
           "file": "prisma/migrations/00000000000000_initial/migration.sql",
@@ -4362,10 +4105,7 @@
       "number": "42",
       "title": "Example API endpoints",
       "line": 3042,
-      "tokens": [
-        "example",
-        "endpoints"
-      ],
+      "tokens": ["example", "endpoints"],
       "evidence": [
         {
           "file": "README.md",
@@ -4421,9 +4161,7 @@
       "number": "43",
       "title": "Error model",
       "line": 3084,
-      "tokens": [
-        "error"
-      ],
+      "tokens": ["error"],
       "evidence": [
         {
           "file": "app/api/editor/projects/[projectId]/[...segments]/route.ts",
@@ -4479,10 +4217,7 @@
       "number": "44",
       "title": "Rate limiting",
       "line": 3107,
-      "tokens": [
-        "rate",
-        "limiting"
-      ],
+      "tokens": ["rate", "limiting"],
       "evidence": [
         {
           "file": "AGENTS.md",
@@ -4538,9 +4273,7 @@
       "number": "45",
       "title": "Authentication rules",
       "line": 3132,
-      "tokens": [
-        "authentication"
-      ],
+      "tokens": ["authentication"],
       "evidence": [
         {
           "file": "README.md",
@@ -4584,9 +4317,7 @@
       "number": "46",
       "title": "RBAC",
       "line": 3149,
-      "tokens": [
-        "rbac"
-      ],
+      "tokens": ["rbac"],
       "evidence": [
         {
           "file": "src/server/daily-autopilot.ts",
@@ -4598,9 +4329,7 @@
       "number": "47",
       "title": "Billing architecture",
       "line": 3175,
-      "tokens": [
-        "billing"
-      ],
+      "tokens": ["billing"],
       "evidence": [
         {
           "file": "README.md",
@@ -4656,10 +4385,7 @@
       "number": "48",
       "title": "Credit ledger",
       "line": 3204,
-      "tokens": [
-        "credit",
-        "ledger"
-      ],
+      "tokens": ["credit", "ledger"],
       "evidence": [
         {
           "file": "app/api/v1/usage/route.ts",
@@ -4715,10 +4441,7 @@
       "number": "49",
       "title": "Cost controls",
       "line": 3231,
-      "tokens": [
-        "cost",
-        "controls"
-      ],
+      "tokens": ["cost", "controls"],
       "evidence": [
         {
           "file": "src/client/api.ts",
@@ -4774,19 +4497,14 @@
       "number": "50",
       "title": "Caching",
       "line": 3262,
-      "tokens": [
-        "caching"
-      ],
+      "tokens": ["caching"],
       "evidence": []
     },
     {
       "number": "51",
       "title": "Concurrency control",
       "line": 3280,
-      "tokens": [
-        "concurrency",
-        "control"
-      ],
+      "tokens": ["concurrency", "control"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -4842,9 +4560,7 @@
       "number": "52",
       "title": "Data retention",
       "line": 3293,
-      "tokens": [
-        "retention"
-      ],
+      "tokens": ["retention"],
       "evidence": [
         {
           "file": "app/api/v1/enterprise/controls/route.ts",
@@ -4892,10 +4608,7 @@
       "number": "53",
       "title": "Deletion workflow",
       "line": 3311,
-      "tokens": [
-        "deletion",
-        "workflow"
-      ],
+      "tokens": ["deletion", "workflow"],
       "evidence": [
         {
           "file": "prisma/migrations/20260813010000_phase5/migration.sql",
@@ -4951,10 +4664,7 @@
       "number": "54",
       "title": "Disaster recovery",
       "line": 3338,
-      "tokens": [
-        "disaster",
-        "recovery"
-      ],
+      "tokens": ["disaster", "recovery"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -4982,9 +4692,7 @@
       "number": "55",
       "title": "Observability",
       "line": 3372,
-      "tokens": [
-        "observability"
-      ],
+      "tokens": ["observability"],
       "evidence": [
         {
           "file": "src/data.ts",
@@ -5004,19 +4712,14 @@
       "number": "56",
       "title": "Alerting",
       "line": 3405,
-      "tokens": [
-        "alerting"
-      ],
+      "tokens": ["alerting"],
       "evidence": []
     },
     {
       "number": "57",
       "title": "Security testing",
       "line": 3426,
-      "tokens": [
-        "security",
-        "testing"
-      ],
+      "tokens": ["security", "testing"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -5040,11 +4743,7 @@
       "number": "58",
       "title": "Prompt injection defense",
       "line": 3450,
-      "tokens": [
-        "prompt",
-        "injection",
-        "defense"
-      ],
+      "tokens": ["prompt", "injection", "defense"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -5100,10 +4799,7 @@
       "number": "59",
       "title": "Tool permissions",
       "line": 3474,
-      "tokens": [
-        "tool",
-        "permissions"
-      ],
+      "tokens": ["tool", "permissions"],
       "evidence": [
         {
           "file": "prisma/schema.prisma",
@@ -5159,9 +4855,7 @@
       "number": "60",
       "title": "Agent architecture",
       "line": 3504,
-      "tokens": [
-        "agent"
-      ],
+      "tokens": ["agent"],
       "evidence": [
         {
           "file": "AGENTS.md",
@@ -5217,9 +4911,7 @@
       "number": "61",
       "title": "MCP policy",
       "line": 3532,
-      "tokens": [
-        "policy"
-      ],
+      "tokens": ["policy"],
       "evidence": [
         {
           "file": "app/api/v1/autonomy-policies/route.ts",
@@ -5275,9 +4967,7 @@
       "number": "62",
       "title": "MCP tools",
       "line": 3547,
-      "tokens": [
-        "tools"
-      ],
+      "tokens": ["tools"],
       "evidence": [
         {
           "file": ".mise.toml",
@@ -5329,10 +5019,7 @@
       "number": "63",
       "title": "Admin console",
       "line": 3571,
-      "tokens": [
-        "admin",
-        "console"
-      ],
+      "tokens": ["admin", "console"],
       "evidence": [
         {
           "file": "src/store.tsx",
@@ -5388,10 +5075,7 @@
       "number": "64",
       "title": "Feature flags",
       "line": 3594,
-      "tokens": [
-        "feature",
-        "flags"
-      ],
+      "tokens": ["feature", "flags"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/ai-creative-plan.md",
@@ -5439,10 +5123,7 @@
       "number": "65",
       "title": "Deployment environments",
       "line": 3617,
-      "tokens": [
-        "deployment",
-        "environments"
-      ],
+      "tokens": ["deployment", "environments"],
       "evidence": [
         {
           "file": "README.md",
@@ -5482,18 +5163,14 @@
       "number": "66",
       "title": "Production domains",
       "line": 3643,
-      "tokens": [
-        "domains"
-      ],
+      "tokens": ["domains"],
       "evidence": []
     },
     {
       "number": "67",
       "title": "CI/CD pipeline",
       "line": 3661,
-      "tokens": [
-        "pipeline"
-      ],
+      "tokens": ["pipeline"],
       "evidence": [
         {
           "file": "src/data.ts",
@@ -5537,10 +5214,7 @@
       "number": "68",
       "title": "Dependency policy",
       "line": 3704,
-      "tokens": [
-        "dependency",
-        "policy"
-      ],
+      "tokens": ["dependency", "policy"],
       "evidence": [
         {
           "file": "app/api/v1/autonomy-policies/route.ts",
@@ -5596,10 +5270,7 @@
       "number": "69",
       "title": "Testing strategy",
       "line": 3718,
-      "tokens": [
-        "testing",
-        "strategy"
-      ],
+      "tokens": ["testing", "strategy"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -5651,10 +5322,7 @@
       "number": "70",
       "title": "Load testing",
       "line": 3766,
-      "tokens": [
-        "load",
-        "testing"
-      ],
+      "tokens": ["load", "testing"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -5710,10 +5378,7 @@
       "number": "71",
       "title": "Production acceptance criteria",
       "line": 3786,
-      "tokens": [
-        "acceptance",
-        "criteria"
-      ],
+      "tokens": ["acceptance", "criteria"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -5749,11 +5414,7 @@
       "number": "72",
       "title": "Phase-by-phase build order",
       "line": 3844,
-      "tokens": [
-        "phase-by-phase",
-        "build",
-        "order"
-      ],
+      "tokens": ["phase-by-phase", "build", "order"],
       "evidence": [
         {
           "file": "src/App.tsx",
@@ -5809,9 +5470,7 @@
       "number": "73",
       "title": "First vertical",
       "line": 3929,
-      "tokens": [
-        "vertical"
-      ],
+      "tokens": ["vertical"],
       "evidence": [
         {
           "file": "prisma/seed.ts",
@@ -5855,10 +5514,7 @@
       "number": "74",
       "title": "First social platforms",
       "line": 3951,
-      "tokens": [
-        "social",
-        "platforms"
-      ],
+      "tokens": ["social", "platforms"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/ai-creative-plan.md",
@@ -5910,10 +5566,7 @@
       "number": "75",
       "title": "First customer workflow",
       "line": 3978,
-      "tokens": [
-        "customer",
-        "workflow"
-      ],
+      "tokens": ["customer", "workflow"],
       "evidence": [
         {
           "file": "README.md",
@@ -5969,11 +5622,7 @@
       "number": "76",
       "title": "Autonomous publishing prerequisites",
       "line": 4013,
-      "tokens": [
-        "autonomous",
-        "publishing",
-        "prerequisites"
-      ],
+      "tokens": ["autonomous", "publishing", "prerequisites"],
       "evidence": [
         {
           "file": "README.md",
@@ -6029,27 +5678,21 @@
       "number": "77",
       "title": "Cost-control rules for AI",
       "line": 4031,
-      "tokens": [
-        "cost-control"
-      ],
+      "tokens": ["cost-control"],
       "evidence": []
     },
     {
       "number": "78",
       "title": "Quality-control rules",
       "line": 4049,
-      "tokens": [
-        "quality-control"
-      ],
+      "tokens": ["quality-control"],
       "evidence": []
     },
     {
       "number": "79",
       "title": "Rendering architecture",
       "line": 4068,
-      "tokens": [
-        "rendering"
-      ],
+      "tokens": ["rendering"],
       "evidence": [
         {
           "file": "docs/production-operations.md",
@@ -6093,9 +5736,7 @@
       "number": "80",
       "title": "Website architecture",
       "line": 4110,
-      "tokens": [
-        "website"
-      ],
+      "tokens": ["website"],
       "evidence": [
         {
           "file": "src/store.tsx",
@@ -6111,9 +5752,7 @@
       "number": "81",
       "title": "Calendar",
       "line": 4149,
-      "tokens": [
-        "calendar"
-      ],
+      "tokens": ["calendar"],
       "evidence": [
         {
           "file": "app/api/v1/content-calendar/[entryId]/route.ts",
@@ -6169,9 +5808,7 @@
       "number": "82",
       "title": "Notification system",
       "line": 4169,
-      "tokens": [
-        "notification"
-      ],
+      "tokens": ["notification"],
       "evidence": [
         {
           "file": "app/api/v1/notifications/[notificationId]/route.ts",
@@ -6227,10 +5864,7 @@
       "number": "83",
       "title": "Email provider",
       "line": 4194,
-      "tokens": [
-        "email",
-        "provider"
-      ],
+      "tokens": ["email", "provider"],
       "evidence": [
         {
           "file": "prisma/migrations/00000000000000_initial/migration.sql",
@@ -6286,9 +5920,7 @@
       "number": "84",
       "title": "Webhooks",
       "line": 4214,
-      "tokens": [
-        "webhooks"
-      ],
+      "tokens": ["webhooks"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -6304,10 +5936,7 @@
       "number": "85",
       "title": "Database migrations",
       "line": 4239,
-      "tokens": [
-        "database",
-        "migrations"
-      ],
+      "tokens": ["database", "migrations"],
       "evidence": [
         {
           "file": ".github/workflows/ci.yml",
@@ -6363,10 +5992,7 @@
       "number": "86",
       "title": "Query performance rules",
       "line": 4275,
-      "tokens": [
-        "query",
-        "performance"
-      ],
+      "tokens": ["query", "performance"],
       "evidence": [
         {
           "file": "src/client/api.ts",
@@ -6422,10 +6048,7 @@
       "number": "87",
       "title": "Pagination standard",
       "line": 4293,
-      "tokens": [
-        "pagination",
-        "standard"
-      ],
+      "tokens": ["pagination", "standard"],
       "evidence": [
         {
           "file": "pnpm-lock.yaml",
@@ -6457,9 +6080,7 @@
       "number": "88",
       "title": "Search",
       "line": 4316,
-      "tokens": [
-        "search"
-      ],
+      "tokens": ["search"],
       "evidence": [
         {
           "file": "app/api/v1/agency/queue/route.ts",
@@ -6515,11 +6136,7 @@
       "number": "89",
       "title": "Analytics architecture growth path",
       "line": 4331,
-      "tokens": [
-        "analytics",
-        "growth",
-        "path"
-      ],
+      "tokens": ["analytics", "growth", "path"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/ai-creative-plan.md",
@@ -6575,10 +6192,7 @@
       "number": "90",
       "title": "Event taxonomy",
       "line": 4360,
-      "tokens": [
-        "event",
-        "taxonomy"
-      ],
+      "tokens": ["event", "taxonomy"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/ai-creative-plan.md",
@@ -6634,9 +6248,7 @@
       "number": "91",
       "title": "Data contracts",
       "line": 4401,
-      "tokens": [
-        "contracts"
-      ],
+      "tokens": ["contracts"],
       "evidence": [
         {
           "file": "README.md",
@@ -6668,10 +6280,7 @@
       "number": "92",
       "title": "Provider health system",
       "line": 4423,
-      "tokens": [
-        "provider",
-        "health"
-      ],
+      "tokens": ["provider", "health"],
       "evidence": [
         {
           "file": ".github/workflows/ci.yml",
@@ -6727,10 +6336,7 @@
       "number": "93",
       "title": "Graceful degradation",
       "line": 4443,
-      "tokens": [
-        "graceful",
-        "degradation"
-      ],
+      "tokens": ["graceful", "degradation"],
       "evidence": [
         {
           "file": "pnpm-lock.yaml",
@@ -6742,12 +6348,7 @@
       "number": "94",
       "title": "No single point of application failure",
       "line": 4468,
-      "tokens": [
-        "single",
-        "point",
-        "application",
-        "failure"
-      ],
+      "tokens": ["single", "point", "application", "failure"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -6803,9 +6404,7 @@
       "number": "95",
       "title": "Production scaling model",
       "line": 4485,
-      "tokens": [
-        "scaling"
-      ],
+      "tokens": ["scaling"],
       "evidence": [
         {
           "file": "src/data.ts",
@@ -6833,10 +6432,7 @@
       "number": "96",
       "title": "Traffic isolation",
       "line": 4520,
-      "tokens": [
-        "traffic",
-        "isolation"
-      ],
+      "tokens": ["traffic", "isolation"],
       "evidence": [
         {
           "file": "README.md",
@@ -6880,10 +6476,7 @@
       "number": "97",
       "title": "Priority queues",
       "line": 4543,
-      "tokens": [
-        "priority",
-        "queues"
-      ],
+      "tokens": ["priority", "queues"],
       "evidence": [
         {
           "file": "src/data.ts",
@@ -6911,9 +6504,7 @@
       "number": "98",
       "title": "Quotas",
       "line": 4562,
-      "tokens": [
-        "quotas"
-      ],
+      "tokens": ["quotas"],
       "evidence": [
         {
           "file": "src/data.ts",
@@ -6933,10 +6524,7 @@
       "number": "99",
       "title": "Abuse prevention",
       "line": 4582,
-      "tokens": [
-        "abuse",
-        "prevention"
-      ],
+      "tokens": ["abuse", "prevention"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -6952,9 +6540,7 @@
       "number": "100",
       "title": "API keys",
       "line": 4601,
-      "tokens": [
-        "keys"
-      ],
+      "tokens": ["keys"],
       "evidence": [
         {
           "file": "app/api/v1/api-keys/route.ts",
@@ -7010,10 +6596,7 @@
       "number": "101",
       "title": "Public API stability",
       "line": 4634,
-      "tokens": [
-        "public",
-        "stability"
-      ],
+      "tokens": ["public", "stability"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -7069,9 +6652,7 @@
       "number": "102",
       "title": "SDK generation",
       "line": 4651,
-      "tokens": [
-        "generation"
-      ],
+      "tokens": ["generation"],
       "evidence": [
         {
           "file": "README.md",
@@ -7127,10 +6708,7 @@
       "number": "103",
       "title": "Customer-facing transparency",
       "line": 4662,
-      "tokens": [
-        "customer-facing",
-        "transparency"
-      ],
+      "tokens": ["customer-facing", "transparency"],
       "evidence": [
         {
           "file": "prisma/schema.prisma",
@@ -7142,9 +6720,7 @@
       "number": "104",
       "title": "Content provenance",
       "line": 4681,
-      "tokens": [
-        "provenance"
-      ],
+      "tokens": ["provenance"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -7180,9 +6756,7 @@
       "number": "105",
       "title": "Versioning",
       "line": 4701,
-      "tokens": [
-        "versioning"
-      ],
+      "tokens": ["versioning"],
       "evidence": [
         {
           "file": "src/data.ts",
@@ -7202,20 +6776,14 @@
       "number": "106",
       "title": "Reproducibility",
       "line": 4720,
-      "tokens": [
-        "reproducibility"
-      ],
+      "tokens": ["reproducibility"],
       "evidence": []
     },
     {
       "number": "107",
       "title": "Legal/privacy baseline",
       "line": 4737,
-      "tokens": [
-        "legal",
-        "privacy",
-        "baseline"
-      ],
+      "tokens": ["legal", "privacy", "baseline"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -7271,9 +6839,7 @@
       "number": "108",
       "title": "Regional data architecture",
       "line": 4756,
-      "tokens": [
-        "regional"
-      ],
+      "tokens": ["regional"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/ai-creative-plan.md",
@@ -7293,10 +6859,7 @@
       "number": "109",
       "title": "Production database region",
       "line": 4776,
-      "tokens": [
-        "database",
-        "region"
-      ],
+      "tokens": ["database", "region"],
       "evidence": [
         {
           "file": "prisma/schema.prisma",
@@ -7352,10 +6915,7 @@
       "number": "110",
       "title": "Performance targets",
       "line": 4792,
-      "tokens": [
-        "performance",
-        "targets"
-      ],
+      "tokens": ["performance", "targets"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -7411,11 +6971,7 @@
       "number": "111",
       "title": "Media output standards",
       "line": 4826,
-      "tokens": [
-        "media",
-        "output",
-        "standards"
-      ],
+      "tokens": ["media", "output", "standards"],
       "evidence": [
         {
           "file": "docs/production-prerequisites.md",
@@ -7471,10 +7027,7 @@
       "number": "112",
       "title": "Caption rendering",
       "line": 4847,
-      "tokens": [
-        "caption",
-        "rendering"
-      ],
+      "tokens": ["caption", "rendering"],
       "evidence": [
         {
           "file": "docs/production-operations.md",
@@ -7530,10 +7083,7 @@
       "number": "113",
       "title": "Brand styling",
       "line": 4870,
-      "tokens": [
-        "brand",
-        "styling"
-      ],
+      "tokens": ["brand", "styling"],
       "evidence": [
         {
           "file": "AGENTS.md",
@@ -7589,10 +7139,7 @@
       "number": "114",
       "title": "Template engine",
       "line": 4891,
-      "tokens": [
-        "template",
-        "engine"
-      ],
+      "tokens": ["template", "engine"],
       "evidence": [
         {
           "file": "src/data.ts",
@@ -7648,10 +7195,7 @@
       "number": "115",
       "title": "Render plan",
       "line": 4912,
-      "tokens": [
-        "render",
-        "plan"
-      ],
+      "tokens": ["render", "plan"],
       "evidence": [
         {
           "file": "app/api/editor/projects/[projectId]/[...segments]/route.ts",
@@ -7707,10 +7251,7 @@
       "number": "116",
       "title": "Initial metrics dashboard",
       "line": 4935,
-      "tokens": [
-        "metrics",
-        "dashboard"
-      ],
+      "tokens": ["metrics", "dashboard"],
       "evidence": [
         {
           "file": "docs/production-operations.md",
@@ -7766,10 +7307,7 @@
       "number": "117",
       "title": "Strategy report",
       "line": 4958,
-      "tokens": [
-        "strategy",
-        "report"
-      ],
+      "tokens": ["strategy", "report"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -7821,11 +7359,7 @@
       "number": "118",
       "title": "Autonomous strategy constraints",
       "line": 4979,
-      "tokens": [
-        "autonomous",
-        "strategy",
-        "constraints"
-      ],
+      "tokens": ["autonomous", "strategy", "constraints"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -7881,9 +7415,7 @@
       "number": "119",
       "title": "Model fallback rules",
       "line": 5005,
-      "tokens": [
-        "fallback"
-      ],
+      "tokens": ["fallback"],
       "evidence": [
         {
           "file": "app/api/v1/campaigns/[campaignId]/delivery-rules/[ruleId]/route.ts",
@@ -7939,11 +7471,7 @@
       "number": "120",
       "title": "Vendor abstraction requirement",
       "line": 5032,
-      "tokens": [
-        "vendor",
-        "abstraction",
-        "requirement"
-      ],
+      "tokens": ["vendor", "abstraction", "requirement"],
       "evidence": [
         {
           "file": "scripts/audit_master_guide.py",
@@ -7971,9 +7499,7 @@
       "number": "121",
       "title": "Why this matters",
       "line": 5053,
-      "tokens": [
-        "matters"
-      ],
+      "tokens": ["matters"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/ai-creative-plan.md",
@@ -7993,9 +7519,7 @@
       "number": "122",
       "title": "Initial implementation priorities",
       "line": 5070,
-      "tokens": [
-        "priorities"
-      ],
+      "tokens": ["priorities"],
       "evidence": [
         {
           "file": "src/views/Checklist.tsx",
@@ -8007,10 +7531,7 @@
       "number": "123",
       "title": "Definition of done for Phase 1",
       "line": 5117,
-      "tokens": [
-        "definition",
-        "done"
-      ],
+      "tokens": ["definition", "done"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -8066,10 +7587,7 @@
       "number": "124",
       "title": "Definition of done for Phase 2",
       "line": 5139,
-      "tokens": [
-        "definition",
-        "done"
-      ],
+      "tokens": ["definition", "done"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -8125,10 +7643,7 @@
       "number": "125",
       "title": "Definition of done for Phase 3",
       "line": 5157,
-      "tokens": [
-        "definition",
-        "done"
-      ],
+      "tokens": ["definition", "done"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -8184,10 +7699,7 @@
       "number": "126",
       "title": "Definition of done for Phase 4",
       "line": 5174,
-      "tokens": [
-        "definition",
-        "done"
-      ],
+      "tokens": ["definition", "done"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -8243,11 +7755,7 @@
       "number": "127",
       "title": "Definition of done for full production",
       "line": 5192,
-      "tokens": [
-        "definition",
-        "done",
-        "full"
-      ],
+      "tokens": ["definition", "done", "full"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -8303,10 +7811,7 @@
       "number": "128",
       "title": "Explicit technologies NOT to use in v1",
       "line": 5215,
-      "tokens": [
-        "explicit",
-        "technologies"
-      ],
+      "tokens": ["explicit", "technologies"],
       "evidence": [
         {
           "file": "docs/production-operations.md",
@@ -8362,10 +7867,7 @@
       "number": "129",
       "title": "Production service inventory",
       "line": 5238,
-      "tokens": [
-        "service",
-        "inventory"
-      ],
+      "tokens": ["service", "inventory"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -8421,9 +7923,7 @@
       "number": "130",
       "title": "Cost model",
       "line": 5281,
-      "tokens": [
-        "cost"
-      ],
+      "tokens": ["cost"],
       "evidence": [
         {
           "file": "app/api/v1/campaigns/[campaignId]/delivery-rules/[ruleId]/route.ts",
@@ -8479,11 +7979,7 @@
       "number": "131",
       "title": "Capacity planning formulae",
       "line": 5313,
-      "tokens": [
-        "capacity",
-        "planning",
-        "formulae"
-      ],
+      "tokens": ["capacity", "planning", "formulae"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -8507,12 +8003,7 @@
       "number": "132",
       "title": "The most important architectural principle",
       "line": 5359,
-      "tokens": [
-        "most",
-        "important",
-        "architectural",
-        "principle"
-      ],
+      "tokens": ["most", "important", "architectural", "principle"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -8548,10 +8039,7 @@
       "number": "133",
       "title": "Final system flow",
       "line": 5392,
-      "tokens": [
-        "final",
-        "flow"
-      ],
+      "tokens": ["final", "flow"],
       "evidence": [
         {
           "file": "prisma/seed.ts",
@@ -8607,10 +8095,7 @@
       "number": "134",
       "title": "Engineering rules that are mandatory",
       "line": 5441,
-      "tokens": [
-        "engineering",
-        "mandatory"
-      ],
+      "tokens": ["engineering", "mandatory"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -8634,13 +8119,7 @@
       "number": "135",
       "title": "Official-source checkpoints used for these decisions",
       "line": 5469,
-      "tokens": [
-        "official-source",
-        "checkpoints",
-        "used",
-        "these",
-        "decisions"
-      ],
+      "tokens": ["official-source", "checkpoints", "used", "these", "decisions"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",
@@ -8696,10 +8175,7 @@
       "number": "136",
       "title": "Final implementation decision",
       "line": 5487,
-      "tokens": [
-        "final",
-        "decision"
-      ],
+      "tokens": ["final", "decision"],
       "evidence": [
         {
           "file": "app/review/[token]/page.tsx",
@@ -8755,10 +8231,7 @@
       "number": "11",
       "title": "Notifications + webhooks (\u00a782, \u00a784)",
       "line": 5644,
-      "tokens": [
-        "notifications",
-        "webhooks"
-      ],
+      "tokens": ["notifications", "webhooks"],
       "evidence": [
         {
           "file": "src/imports/pasted_text/autozentic-blueprint-1.md",

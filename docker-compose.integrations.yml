@@ -25,6 +25,7 @@ services:
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.131.0
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
-    volumes: ["./infrastructure/observability/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro"]
+    volumes:
+      ["./infrastructure/observability/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro"]
 volumes:
   grafana-data:

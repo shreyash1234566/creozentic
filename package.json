@@ -14,7 +14,7 @@
     "db:seed": "tsx prisma/seed.ts",
     "worker": "tsx src/server/worker.ts",
     "test:production-smoke": "tsx scripts/production-smoke.ts",
-    "test:unit": "tsx --test tests/core-contracts.test.ts tests/editor-contracts.test.ts tests/guide-complete-contracts.test.ts",
+    "test:unit": "tsx --test tests/core-contracts.test.ts tests/editor-contracts.test.ts tests/guide-complete-contracts.test.ts tests/adopted-engines.test.ts",
     "test": "pnpm test:unit && pnpm test:production-smoke",
     "format": "oxfmt",
     "guide:check": "tsx scripts/guide-completeness.ts"
