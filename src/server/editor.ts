@@ -7,6 +7,7 @@ import { editorDirectorContract, promptVersion } from "./editor-prompts";
 import { runSpecializedJudges } from "./editor-qa";
 import { renderEditorVideo } from "./editor-render";
 import { extractMediaEvidence } from "./editor-evidence";
+import { buildEditDecisionList, buildOtioTimeline, createRenderManifest } from "./part2-runtime";
 
 const ISSUE_CODES = editorIssueCodes;
 const directorContract = editorDirectorContract;
@@ -96,6 +97,22 @@ function planInput(project: {
       transition: "cut",
     },
   ];
+  const runtimeEvidence = project.evidence.map((item) => ({
+    id: item.id,
+    startSec: item.startSec ?? undefined,
+    endSec: item.endSec ?? undefined,
+    transcript: item.transcript ?? undefined,
+    verified: true,
+  }));
+  const editDecisionList = buildEditDecisionList(beats, runtimeEvidence);
+  const otioTimeline = buildOtioTimeline(editDecisionList);
+  const renderManifest = createRenderManifest({
+    planVersion: 1,
+    renderer: "ffmpeg-v1",
+    sourceChecksums: evidenceIds,
+    promptVersions: { director: promptVersion("editor_narrative_planner") },
+    outputFormats: ["mp4", "webm"],
+  });
   const hooks = [
     {
       rank: 1,
@@ -226,6 +243,9 @@ function planInput(project: {
             { type: "caption", safeZone: "bottom" },
             { type: "duck-music", when: "speech" },
             { type: "transition", allowed: ["cut", "dissolve"] },
+            { type: "edl", decisions: editDecisionList },
+            { type: "otio", timeline: otioTimeline },
+            { type: "render-manifest", manifest: renderManifest },
           ],
         },
         evidenceIds,

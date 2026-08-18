@@ -9,4 +9,6 @@ test("studio shell exposes the existing workflow navigation and System Map", asy
   await expect(page.getByRole("heading", { name: /The system, made legible/i })).toBeVisible();
   await expect(page.getByText("AI Video Editor", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("Backend → frontend coverage", { exact: true })).toBeVisible();
+  await page.goto("/admin");
+  await expect(page.getByRole("heading", { name: /Control plane/i })).toBeVisible();
 });
