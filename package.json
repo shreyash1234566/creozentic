@@ -23,7 +23,8 @@
     "guide:check": "tsx scripts/guide-completeness.ts",
     "oss:check": "tsx scripts/oss-completeness.ts",
     "benchmark:editor": "tsx scripts/editor-benchmark.ts",
-    "openapi:generate": "tsx scripts/generate-openapi.ts"
+    "openapi:generate": "tsx scripts/generate-openapi.ts",
+    "env:check": "tsx scripts/validate-env.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1107.0",
