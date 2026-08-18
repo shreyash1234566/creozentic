@@ -1,4 +1,5 @@
 import { db } from "./db";
+import type { Prisma } from "@prisma/client";
 import { ApiError, idempotencyKey } from "./api";
 import { requireRole, type RequestContext } from "./auth";
 import { canEditorTransition, editorIssueCodes } from "./editor-contracts";
@@ -9,6 +10,10 @@ import { extractMediaEvidence } from "./editor-evidence";
 
 const ISSUE_CODES = editorIssueCodes;
 const directorContract = editorDirectorContract;
+
+function json(value: unknown) {
+  return value as Prisma.InputJsonValue;
+}
 
 function nonEmpty(value: unknown, fallback: string) {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
@@ -25,7 +30,20 @@ function transitionOrThrow(current: string, event: string) {
   return result.state;
 }
 
-function planInput(project: { objective: string; audience: string; platform: string }) {
+function planInput(project: {
+  objective: string;
+  audience: string;
+  platform: string;
+  evidence: Array<{
+    id: string;
+    startSec: number | null;
+    endSec: number | null;
+    transcript: string | null;
+  }>;
+}) {
+  const evidenceIds = project.evidence.map((item) => item.id);
+  const firstEvidence =
+    project.evidence.find((item) => item.startSec !== null) ?? project.evidence[0];
   const beats = [
     {
       sequence: 1,
@@ -33,34 +51,44 @@ function planInput(project: { objective: string; audience: string; platform: str
       endSec: 3,
       label: "Hook",
       spokenText: `A clear ${project.objective} hook for ${project.audience}.`,
-      rationale: "Fast context and promise.",
-      evidenceIds: [],
+      rationale: "Direct audience pain and promise.",
+      evidenceIds: firstEvidence ? [firstEvidence.id] : [],
       transition: "cut",
     },
     {
       sequence: 2,
       startSec: 3,
       endSec: 7,
-      label: "Proof",
-      spokenText: "Show verified source evidence before interpretation.",
-      rationale: "Keeps product claims grounded.",
-      evidenceIds: [],
+      label: "Problem",
+      spokenText: "Name the viewer problem before adding visual noise.",
+      rationale: "Creates tension without an unsupported claim.",
+      evidenceIds,
       transition: "cut",
     },
     {
       sequence: 3,
       startSec: 7,
-      endSec: 12,
-      label: "Payoff",
-      spokenText: "Resolve the viewer problem with the approved product story.",
-      rationale: "Completes the narrative arc.",
-      evidenceIds: [],
+      endSec: 11,
+      label: "Proof",
+      spokenText: "Show verified source evidence before interpretation.",
+      rationale: "Keeps the promise grounded in source truth.",
+      evidenceIds,
       transition: "dissolve",
     },
     {
       sequence: 4,
-      startSec: 12,
+      startSec: 11,
       endSec: 15,
+      label: "Payoff",
+      spokenText: "Resolve the viewer problem with the approved product story.",
+      rationale: "Connects evidence to outcome.",
+      evidenceIds,
+      transition: "cut",
+    },
+    {
+      sequence: 5,
+      startSec: 15,
+      endSec: 18,
       label: "CTA",
       spokenText: `Invite the viewer to act on ${project.platform}.`,
       rationale: "Platform-specific close.",
@@ -68,63 +96,212 @@ function planInput(project: { objective: string; audience: string; platform: str
       transition: "cut",
     },
   ];
+  const hooks = [
+    {
+      rank: 1,
+      text: `What if ${project.objective} took 15 seconds?`,
+      rationale: "Direct promise and high tension.",
+      evidenceIds: firstEvidence ? [firstEvidence.id] : [],
+      locked: false,
+    },
+    {
+      rank: 2,
+      text: `A practical way for ${project.audience} to get started.`,
+      rationale: "Audience-specific framing.",
+      evidenceIds,
+      locked: false,
+    },
+    {
+      rank: 3,
+      text: "See the proof before you trust the promise.",
+      rationale: "Evidence-led curiosity.",
+      evidenceIds,
+      locked: false,
+    },
+  ];
   return {
     status: "DRAFT",
-    changedFields: ["beats", "hooks", "visualInserts"],
-    modelVersions: { planner: "deterministic-v1" },
+    changedFields: [
+      "beats",
+      "hooks",
+      "visualInserts",
+      "motionGraphics",
+      "audioPlan",
+      "captionPlan",
+    ],
+    modelVersions: { planner: "deterministic-v2" },
     promptVersions: {
       director: promptVersion("editor_narrative_planner"),
       contract: directorContract,
     },
     beats,
-    hooks: [
-      {
-        rank: 1,
-        text: `What if ${project.objective} took 15 seconds?`,
-        rationale: "Direct promise.",
-        evidenceIds: [],
-        locked: false,
-      },
-      {
-        rank: 2,
-        text: `A practical way for ${project.audience} to get started.`,
-        rationale: "Audience-specific framing.",
-        evidenceIds: [],
-        locked: false,
-      },
-    ],
+    hooks,
     visualInserts: [
       {
+        beatId: null,
         sourceStrategy: "verified-source-first",
-        assetSource: null,
+        assetSource: firstEvidence?.id ?? null,
         prompt: null,
-        motionRecipe: { type: "subtle-pan" },
+        motionRecipe: {
+          type: "subtle-pan",
+          keyframes: [
+            { t: 0, scale: 1 },
+            { t: 1, scale: 1.04 },
+          ],
+        },
         factuality: "VERIFIED_PENDING",
         approvalState: "PENDING",
         fallback: "product-macro",
       },
+      {
+        beatId: null,
+        sourceStrategy: "rights-cleared-then-generated-metaphor",
+        assetSource: null,
+        prompt: `A restrained visual supporting ${project.objective}`,
+        motionRecipe: { type: "parallax", bounded: true },
+        factuality: "NON_FACTUAL_METAPHOR",
+        approvalState: "PENDING",
+        fallback: "kinetic-typography-card",
+      },
     ],
+    motionGraphics: [
+      {
+        beatId: null,
+        kind: "kinetic-caption",
+        parameters: { mode: "word-emphasis", maxLines: 2, safeZone: "caption-bottom" },
+        styleVersion: "brand-default-v1",
+      },
+      {
+        beatId: null,
+        kind: "proof-callout",
+        parameters: { label: "verified source", style: "minimal-card", safeZone: "product-safe" },
+        styleVersion: "brand-default-v1",
+      },
+      {
+        beatId: null,
+        kind: "cta-card",
+        parameters: { durationSec: 3, transition: "cut" },
+        styleVersion: "brand-default-v1",
+      },
+    ],
+    audioPlan: {
+      ducking: { enabled: true, targetDb: -14, attackMs: 80, releaseMs: 220 },
+      music: { strategy: "rights-cleared-or-user-supplied", beatSync: true },
+      voice: { preserveSourceVoice: true, clippingTargetDb: -1 },
+    },
+    captionPlan: {
+      style: { preset: "brand-default", emphasis: "word-level" },
+      safeZone: { top: 0.1, bottom: 0.15, faceAvoidance: true },
+      segments: beats.map((beat) => ({
+        startSec: beat.startSec,
+        endSec: beat.endSec,
+        text: beat.spokenText,
+        evidenceIds: beat.evidenceIds,
+      })),
+    },
     narrativeMap: {
-      structure: { opening: "hook", middle: "proof", close: "cta" },
-      evidenceIds: [],
-      rationale: "A short-form evidence-first arc.",
+      structure: {
+        opening: "hook",
+        problem: "problem",
+        proof: "proof",
+        payoff: "payoff",
+        close: "cta",
+      },
+      evidenceIds,
+      rationale:
+        "A short-form evidence-first arc with a complete problem-to-proof-to-payoff structure.",
     },
     decisions: [
       {
         decisionType: "SOURCE_PRIORITY",
-        decision: { order: ["verified", "deterministic", "generated"] },
-        evidenceIds: [],
+        decision: { order: ["verified", "deterministic", "rights-cleared", "generated"] },
+        evidenceIds,
         complexity: "LOW",
+      },
+      {
+        decisionType: "EDIT_DECISION_LIST",
+        decision: {
+          operations: [
+            { type: "preserve", range: [0, 18] },
+            { type: "caption", safeZone: "bottom" },
+            { type: "duck-music", when: "speech" },
+            { type: "transition", allowed: ["cut", "dissolve"] },
+          ],
+        },
+        evidenceIds,
+        complexity: "MEDIUM",
       },
     ],
     visualBible: {
       palette: { source: "brand-memory" },
       typography: { source: "brand-memory" },
-      composition: { safeZones: true },
-      motion: { intensity: "subtle" },
-      forbidden: ["unverified-factual-text"],
+      composition: { safeZones: true, faceAvoidance: true, productSafe: true },
+      motion: { intensity: "subtle", maxScaleDelta: 0.04 },
+      forbidden: ["unverified-factual-text", "invented-logo", "unbounded-camera-motion"],
     },
   };
+}
+
+const EDITOR_SKILLS = [
+  {
+    skillId: "hook-selection",
+    name: "Hook selection",
+    promptTemplateId: "editor_hook_selection@1",
+    evaluationCriteria: { tension: true, evidenceAnchored: true },
+  },
+  {
+    skillId: "captioning",
+    name: "Evidence-safe captioning",
+    promptTemplateId: "editor_captioning@1",
+    evaluationCriteria: { safeZone: true, transcriptAligned: true },
+  },
+  {
+    skillId: "broll-planning",
+    name: "B-roll planning",
+    promptTemplateId: "editor_broll_planning@1",
+    evaluationCriteria: { sourcePriority: true, rightsTrace: true },
+  },
+  {
+    skillId: "motion-graphics",
+    name: "Motion graphics planning",
+    promptTemplateId: "editor_motion_graphics@1",
+    evaluationCriteria: { boundedMotion: true, typographySafe: true },
+  },
+  {
+    skillId: "quality-judging",
+    name: "Quality judging",
+    promptTemplateId: "editor_quality_judging@1",
+    evaluationCriteria: { issueCodes: true, evidenceAnchored: true },
+  },
+  {
+    skillId: "scoped-repair",
+    name: "Scoped repair",
+    promptTemplateId: "editor_scoped_repair@1",
+    evaluationCriteria: { preserveList: true, boundedAttempts: true },
+  },
+];
+
+async function ensureEditorSkills() {
+  return Promise.all(
+    EDITOR_SKILLS.map((skill) =>
+      db.skillDefinition.upsert({
+        where: { skillId: skill.skillId },
+        create: {
+          ...skill,
+          version: 1,
+          inputSchema: { type: "object" },
+          outputSchema: { type: "object" },
+          allowedTools: [],
+        },
+        update: {
+          name: skill.name,
+          promptTemplateId: skill.promptTemplateId,
+          evaluationCriteria: skill.evaluationCriteria,
+          status: "ACTIVE",
+        },
+      }),
+    ),
+  );
 }
 
 export async function createEditorProject(context: RequestContext, input: Record<string, unknown>) {
@@ -154,6 +331,24 @@ export async function createEditorProject(context: RequestContext, input: Record
           : {},
     },
   });
+  const memory =
+    input.memorySnapshot && typeof input.memorySnapshot === "object"
+      ? (input.memorySnapshot as Record<string, unknown>)
+      : {};
+  await db.$transaction(async (tx) => {
+    await tx.memorySnapshot.create({
+      data: { projectId: project.id, version: 1, snapshot: json(memory) },
+    });
+    const entries = Object.entries(memory).map(([key, value]) => ({
+      projectId: project.id,
+      category: "project",
+      key,
+      value: json(value),
+      source: "editor-project-input",
+      confidence: 1,
+    }));
+    if (entries.length) await tx.editingMemory.createMany({ data: entries });
+  });
   const response = { ...project } as unknown as Record<string, unknown>;
   if (key)
     await db.idempotencyKey
@@ -180,6 +375,7 @@ export async function getEditorProject(context: RequestContext, projectId: strin
           beats: true,
           hooks: true,
           visualInserts: true,
+          motionGraphics: true,
           audioPlan: true,
           captionPlan: true,
           narrativeMap: true,
@@ -194,6 +390,9 @@ export async function getEditorProject(context: RequestContext, projectId: strin
       },
       iterations: { orderBy: { iteration: "desc" } },
       approvals: { orderBy: { createdAt: "desc" } },
+      memorySnapshots: { orderBy: { version: "desc" } },
+      editingMemory: { orderBy: { createdAt: "desc" } },
+      skills: { orderBy: { createdAt: "desc" } },
     },
   });
   if (!project) throw new ApiError(404, "EDITOR_PROJECT_NOT_FOUND", "Editor project not found.");
@@ -222,28 +421,53 @@ export async function analyzeEditorProject(
     await tx.editorProject.update({ where: { id: project.id }, data: { state: "ANALYZING" } });
     if (!assetIds.length && !extracted) return [];
     await tx.mediaEvidence.deleteMany({ where: { projectId: project.id } });
-    await tx.mediaEvidence.createMany({
-      data: [
-        ...assetIds.map((assetId) => ({
+    for (const assetId of assetIds) {
+      await tx.mediaEvidence.create({
+        data: {
           projectId: project.id,
           assetId,
           kind: "SOURCE_ASSET",
           payload: { source: "verified-asset" },
           confidence: 1,
-        })),
-        ...(extracted
-          ? [
-              {
-                assetId: undefined,
-                projectId: project.id,
-                kind: "EXTRACTED_MEDIA",
-                payload: extracted,
-                confidence: 1,
-              },
-            ]
-          : []),
-      ] as never,
-    });
+        },
+      });
+    }
+    if (extracted) {
+      const media = await tx.mediaEvidence.create({
+        data: {
+          projectId: project.id,
+          kind: "EXTRACTED_MEDIA",
+          startSec: 0,
+          endSec: extracted.durationSec,
+          payload: json(extracted),
+          confidence: 1,
+        },
+      });
+      if (extracted.transcriptWords.length)
+        await tx.transcriptWord.createMany({
+          data: extracted.transcriptWords.map((word) => ({ evidenceId: media.id, ...word })),
+        });
+      if (extracted.shots.length)
+        await tx.shotBoundary.createMany({
+          data: extracted.shots.map((shot) => ({ evidenceId: media.id, startSec: shot.startSec, endSec: shot.endSec, confidence: shot.confidence })),
+        });
+      if (extracted.audioWindows.length)
+        await tx.audioFeatureWindow.createMany({
+          data: extracted.audioWindows.map((window) => ({ evidenceId: media.id, startSec: window.startSec, endSec: window.endSec, features: json(window.features) })),
+        });
+      if (extracted.entities.length)
+        await tx.detectedEntity.createMany({
+          data: extracted.entities.map((entity) => ({ evidenceId: media.id, label: entity.label, confidence: entity.confidence, region: entity.region ? json(entity.region) : undefined })),
+        });
+      if (extracted.ocrRegions.length)
+        await tx.oCRRegion.createMany({
+          data: extracted.ocrRegions.map((region) => ({ evidenceId: media.id, text: region.text, confidence: region.confidence, region: json(region.region) })),
+        });
+      if (extracted.regions.length)
+        await tx.evidenceRegion.createMany({
+          data: extracted.regions.map((region) => ({ evidenceId: media.id, label: region.label, x: region.x, y: region.y, width: region.width, height: region.height })),
+        });
+    }
     return tx.mediaEvidence.findMany({
       where: { projectId: project.id },
       orderBy: { createdAt: "asc" },
@@ -258,7 +482,13 @@ export async function planEditorProject(context: RequestContext, projectId: stri
   const project = await getEditorProject(context, projectId);
   const nextVersion = (project.plans[0]?.version ?? 0) + 1;
   transitionOrThrow(project.state, "PLAN");
-  const input = planInput(project);
+  const skills = await ensureEditorSkills();
+  const input = planInput({
+    objective: project.objective,
+    audience: project.audience,
+    platform: project.platform,
+    evidence: project.evidence,
+  });
   const plan = await db.editPlanVersion.create({
     data: {
       projectId,
@@ -267,14 +497,9 @@ export async function planEditorProject(context: RequestContext, projectId: stri
       beats: { create: input.beats },
       hooks: { create: input.hooks },
       visualInserts: { create: input.visualInserts },
-      audioPlan: { create: { ducking: { enabled: true }, music: {}, voice: {} } },
-      captionPlan: {
-        create: {
-          style: { preset: "brand-default" },
-          safeZone: { top: 0.1, bottom: 0.15 },
-          segments: [],
-        },
-      },
+      motionGraphics: { create: input.motionGraphics },
+      audioPlan: { create: input.audioPlan },
+      captionPlan: { create: input.captionPlan },
       narrativeMap: { create: input.narrativeMap },
       visualBible: { create: input.visualBible },
       decisions: { create: input.decisions },
@@ -288,6 +513,28 @@ export async function planEditorProject(context: RequestContext, projectId: stri
       narrativeMap: true,
       visualBible: true,
       decisions: true,
+    },
+  });
+  await db.skillExecution.createMany({
+    data: skills.map((skill) => ({
+      projectId,
+      skillId: skill.skillId,
+      status: "COMPLETED",
+      input: { planVersion: nextVersion },
+      output: { status: "materialized" },
+    })),
+  });
+  await db.memorySnapshot.create({
+    data: {
+      projectId,
+      version: nextVersion + 1,
+      snapshot: json({
+        objective: project.objective,
+        audience: project.audience,
+        platform: project.platform,
+        evidenceIds: project.evidence.map((item) => item.id),
+        planVersion: nextVersion,
+      }),
     },
   });
   await db.editorProject.update({

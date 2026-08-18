@@ -1,8 +1,11 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { createHash } from "node:crypto";
 import { configuredGateway } from "./provider-adapters";
 
 const execFileAsync = promisify(execFile);
+
+type NumericRecord = Record<string, unknown>;
 
 export type EvidenceBundle = {
   durationSec: number;
@@ -14,13 +17,92 @@ export type EvidenceBundle = {
     sampleRate?: number;
   }>;
   transcript?: unknown;
-  entities?: unknown;
-  ocr?: unknown;
-  sourceChecksum?: string;
+  transcriptWords: Array<{ word: string; startSec: number; endSec: number; confidence?: number }>;
+  shots: Array<{ startSec: number; endSec: number; confidence?: number }>;
+  audioWindows: Array<{ startSec: number; endSec: number; features: NumericRecord }>;
+  entities: Array<{ label: string; confidence: number; region?: NumericRecord }>;
+  ocrRegions: Array<{ text: string; confidence: number; region: NumericRecord }>;
+  regions: Array<{ label: string; x: number; y: number; width: number; height: number }>;
+  transcriptProvider?: string;
+  sourceChecksum: string;
   extractorVersion: string;
 };
 
-export async function extractMediaEvidence(input: { assetPath: string; language?: string }) {
+function record(value: unknown): NumericRecord {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as NumericRecord)
+    : {};
+}
+
+function numberValue(value: unknown): number | undefined {
+  const number = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(number) ? number : undefined;
+}
+
+function list(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function normalizeWords(transcript: unknown): EvidenceBundle["transcriptWords"] {
+  const root = record(transcript);
+  const words = list(root.words ?? root.segments ?? transcript);
+  return words.flatMap((item) => {
+    const word = record(item);
+    const text = String(word.word ?? word.text ?? "").trim();
+    const startSec = numberValue(word.startSec ?? word.start ?? word.startTime);
+    const endSec = numberValue(word.endSec ?? word.end ?? word.endTime);
+    if (!text || startSec === undefined || endSec === undefined) return [];
+    return [{ word: text, startSec, endSec, confidence: numberValue(word.confidence) }];
+  });
+}
+
+function normalizeShots(value: unknown): EvidenceBundle["shots"] {
+  return list(value).flatMap((item) => {
+    const shot = record(item);
+    const startSec = numberValue(shot.startSec ?? shot.start);
+    const endSec = numberValue(shot.endSec ?? shot.end);
+    if (startSec === undefined || endSec === undefined || endSec <= startSec) return [];
+    return [{ startSec, endSec, confidence: numberValue(shot.confidence) }];
+  });
+}
+
+function normalizeAudioWindows(value: unknown): EvidenceBundle["audioWindows"] {
+  return list(value).flatMap((item) => {
+    const window = record(item);
+    const startSec = numberValue(window.startSec ?? window.start);
+    const endSec = numberValue(window.endSec ?? window.end);
+    if (startSec === undefined || endSec === undefined || endSec <= startSec) return [];
+    return [{ startSec, endSec, features: record(window.features ?? window) }];
+  });
+}
+
+function normalizeEntities(value: unknown): EvidenceBundle["entities"] {
+  return list(value).flatMap((item) => {
+    const entity = record(item);
+    const label = String(entity.label ?? entity.name ?? "").trim();
+    const confidence = numberValue(entity.confidence);
+    if (!label || confidence === undefined) return [];
+    return [
+      {
+        label,
+        confidence,
+        region: Object.keys(record(entity.region)).length ? record(entity.region) : undefined,
+      },
+    ];
+  });
+}
+
+function normalizeOcr(value: unknown): EvidenceBundle["ocrRegions"] {
+  return list(value).flatMap((item) => {
+    const region = record(item);
+    const text = String(region.text ?? "").trim();
+    const confidence = numberValue(region.confidence);
+    if (!text || confidence === undefined) return [];
+    return [{ text, confidence, region: record(region.region ?? region.bounds) }];
+  });
+}
+
+export async function extractMediaEvidence(input: { assetPath: string; language?: string }): Promise<EvidenceBundle> {
   const { stdout } = await execFileAsync(
     process.env.FFPROBE_PATH ?? "ffprobe",
     [
@@ -39,13 +121,16 @@ export async function extractMediaEvidence(input: { assetPath: string; language?
     streams?: Array<Record<string, unknown>>;
   };
   const speech = configuredGateway("deepgram");
-  const transcript = speech
+  const transcriptResult = speech
     ? await speech.transcribe({
         assetUrl: input.assetPath,
         language: input.language,
         diarize: true,
       })
     : undefined;
+  const transcript = transcriptResult?.transcript;
+  const sourceChecksum = createHash("sha256").update(stdout).digest("hex");
+  const transcriptWords = normalizeWords(transcript);
   return {
     durationSec: Number(parsed.format?.duration ?? 0),
     streams: (parsed.streams ?? []).map((stream) => ({
@@ -55,7 +140,17 @@ export async function extractMediaEvidence(input: { assetPath: string; language?
       height: typeof stream.height === "number" ? stream.height : undefined,
       sampleRate: typeof stream.sample_rate === "number" ? stream.sample_rate : undefined,
     })),
-    transcript: transcript?.transcript,
-    extractorVersion: "ffprobe-evidence-v1",
+    transcript,
+    transcriptWords,
+    shots: [],
+    audioWindows: [],
+    entities: [],
+    ocrRegions: [],
+    regions: [],
+    transcriptProvider: transcriptResult?.providerId,
+    sourceChecksum,
+    extractorVersion: "ffprobe-evidence-v2",
   } satisfies EvidenceBundle;
 }
+
+export { normalizeAudioWindows, normalizeEntities, normalizeOcr, normalizeShots, normalizeWords };
