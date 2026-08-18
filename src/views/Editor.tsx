@@ -57,9 +57,15 @@ export default function Editor() {
     setError("");
     try {
       const result = await operation();
-      setProject(
-        (current) => ({ ...(current ?? {}), ...(result as EditorProject) }) as EditorProject,
-      );
+      const nextId = String((result as Record<string, unknown>).id ?? project?.id ?? "");
+      if (nextId) {
+        const latest = await getEditorProject(nextId);
+        setProject(latest);
+      } else {
+        setProject(
+          (current) => ({ ...(current ?? {}), ...(result as EditorProject) }) as EditorProject,
+        );
+      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Editor action failed.");
     } finally {
@@ -76,6 +82,26 @@ export default function Editor() {
       return created;
     });
   const projectId = project?.id ?? "";
+  const plans = Array.isArray(project?.plans)
+    ? (project.plans as Array<Record<string, unknown>>)
+    : [];
+  const activePlan = plans[0] ?? null;
+  const rawBeats = Array.isArray(activePlan?.beats)
+    ? (activePlan.beats as Array<Record<string, unknown>>)
+    : [];
+  const beats: Array<Record<string, unknown>> = rawBeats.length
+    ? rawBeats
+    : demoBeats.map(([time, label, spokenText]) => ({ time, label, spokenText }));
+  const hooks = Array.isArray(activePlan?.hooks)
+    ? (activePlan.hooks as Array<Record<string, unknown>>)
+    : [];
+  const renders = Array.isArray(project?.renders)
+    ? (project.renders as Array<Record<string, unknown>>)
+    : [];
+  const evaluations = Array.isArray(renders[0]?.evaluations)
+    ? (renders[0]?.evaluations as Array<Record<string, unknown>>)
+    : [];
+  const formatTime = (value: unknown) => `${Number(value ?? 0).toFixed(1)}s`;
 
   return (
     <div className="space-y-8">
@@ -181,23 +207,40 @@ export default function Editor() {
       {project && tab === "storyboard" && (
         <Panel title="Storyboard">
           <div className="space-y-3">
-            {demoBeats.map(([time, label, copy]) => (
-              <div
-                key={label}
-                className="grid gap-3 rounded-xl border border-line p-4 md:grid-cols-[110px_100px_1fr_auto] md:items-center"
-              >
-                <span className="font-mono text-xs text-ink-soft">{time}</span>
-                <span className="font-semibold">{label}</span>
-                <span className="text-sm text-ink-soft">{copy}</span>
-                <span className="rounded-full bg-leaf/10 px-2 py-1 font-mono text-[9px] uppercase text-leaf">
-                  evidence pending
-                </span>
-              </div>
-            ))}
+            {beats.map((beat, index) => {
+              const start = beat.startSec ?? String(beat.time ?? "").split("–")[0];
+              const end = beat.endSec ?? String(beat.time ?? "").split("–")[1];
+              const label = String(beat.label ?? `Beat ${index + 1}`);
+              return (
+                <div
+                  key={`${label}-${index}`}
+                  className="grid gap-3 rounded-xl border border-line p-4 md:grid-cols-[110px_100px_1fr_auto] md:items-center"
+                >
+                  <span className="font-mono text-xs text-ink-soft">
+                    {String(beat.time ?? `${formatTime(start)}–${formatTime(end)}`)}
+                  </span>
+                  <span className="font-semibold">{label}</span>
+                  <span className="text-sm text-ink-soft">
+                    {String(beat.spokenText ?? beat.copy ?? "")}
+                  </span>
+                  <span className="rounded-full bg-leaf/10 px-2 py-1 font-mono text-[9px] uppercase text-leaf">
+                    {Array.isArray(beat.evidenceIds) && beat.evidenceIds.length
+                      ? "evidence linked"
+                      : "evidence pending"}
+                  </span>
+                </div>
+              );
+            })}
           </div>
           <div className="mt-5 flex gap-2">
             <Btn
-              onClick={() => run(() => editorAction(projectId, "hook-lock", { hookId: "pending" }))}
+              onClick={() =>
+                run(() =>
+                  editorAction(projectId, "hook-lock", {
+                    hookId: String(hooks[0]?.id ?? hooks[0]?.rank ?? "pending"),
+                  }),
+                )
+              }
             >
               Lock selected hook
             </Btn>
@@ -241,16 +284,22 @@ export default function Editor() {
         <Panel title="Timeline & Render">
           <div className="rounded-xl border border-line p-5">
             <div className="flex items-center justify-between">
-              <span className="font-display text-2xl">15.0s</span>
+              <span className="font-display text-2xl">
+                {formatTime(beats.at(-1)?.endSec ?? 15)}
+              </span>
               <span className="font-mono text-[10px] uppercase text-ink-soft">
                 FFmpeg pipeline · QA v1
               </span>
             </div>
             <div className="mt-5 grid grid-cols-4 gap-1">
-              {demoBeats.map(([time, label]) => (
-                <div key={label} className="rounded-md bg-indigo/15 p-3">
-                  <div className="font-mono text-[9px] text-indigo">{time}</div>
-                  <div className="mt-2 text-sm font-semibold">{label}</div>
+              {beats.map((beat, index) => (
+                <div key={`${String(beat.label)}-${index}`} className="rounded-md bg-indigo/15 p-3">
+                  <div className="font-mono text-[9px] text-indigo">
+                    {String(beat.time ?? `${formatTime(beat.startSec)}–${formatTime(beat.endSec)}`)}
+                  </div>
+                  <div className="mt-2 text-sm font-semibold">
+                    {String(beat.label ?? `Beat ${index + 1}`)}
+                  </div>
                 </div>
               ))}
             </div>
@@ -266,11 +315,20 @@ export default function Editor() {
       {project && tab === "quality" && (
         <Panel title="Quality & Iteration">
           <div className="grid gap-3 md:grid-cols-3">
-            {[
-              ["Structural", "PASS"],
-              ["Product facts", "REVIEW"],
-              ["Platform spec", "PASS"],
-            ].map(([label, verdict]) => (
+            {(evaluations.length
+              ? evaluations.map(
+                  (evaluation) =>
+                    [
+                      String(evaluation.judge ?? evaluation.kind ?? "Judge"),
+                      String(evaluation.verdict ?? evaluation.status ?? "REVIEW"),
+                    ] as [string, string],
+                )
+              : ([
+                  ["Structural", "PENDING"],
+                  ["Product facts", "PENDING"],
+                  ["Platform spec", "PENDING"],
+                ] as [string, string][])
+            ).map(([label, verdict]) => (
               <div key={label} className="rounded-xl border border-line p-4">
                 <div className="label">{label}</div>
                 <div

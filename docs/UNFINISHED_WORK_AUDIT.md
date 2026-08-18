@@ -97,3 +97,47 @@ The sandbox can verify deterministic code behavior, formatting, TypeScript, Pris
 The correct completion rule is therefore:
 
 > **Every sandbox-completable row should become Finished in code and tests. External rows should remain External only when the missing input is genuinely outside the sandbox. No row should be called Finished merely because a schema, placeholder, or adapter exists.**
+
+## Part II — Definitive recheck after implementation pass
+
+This is the required post-audit table. **Finished** means the local code contract and verification are present. **Not Finished** means meaningful local implementation is still missing; external dependencies do not excuse a missing local contract.
+
+| ID | Part II row | Final status | Evidence after recheck | Exact remaining gap, if not finished |
+|---|---|---|---|---|
+| L1 | Prescribed monorepo boundaries | **Finished at boundary level** | `apps/web`, `apps/api`, `apps/worker`, `apps/admin`, shared package directories, and pnpm workspace | Root Next runtime has not been physically migrated into `apps/web`; the existing root app remains the active host |
+| L2 | Dedicated admin application | **Not Finished** | `apps/admin` operator contract exists | No complete independently rendered admin UI, routing, auth shell, and admin E2E surface |
+| L3 | Single authoritative OpenAPI contract | **Not Finished** | `docs/openapi.json` covers core routes | Full 151-route generation, schema validation, and runtime drift checking are not implemented |
+| L4 | Typed configuration package | **Finished at code-contract level** | `packages/config/src/index.ts` with redacted configuration | Production secret manager integration remains External |
+| L5 | Dedicated queue package | **Finished at code-contract level** | `packages/queue/src/index.ts` with queues, retry, idempotency, dead-letter policy | Production Pub/Sub/Redis/Temporal consumer migration remains incomplete/external |
+| L6 | Dedicated AI package | **Not Finished** | `packages/ai` provider boundary exists | Existing business flows are not fully migrated to one routing, budget, usage, and fallback runtime |
+| L7 | Dedicated storage package | **Finished at code-contract level** | `packages/storage` tenant-safe key and signed-object boundary | R2 bucket/lifecycle activation remains External |
+| L8 | Logger/security/events/feature-flag packages | **Finished at boundary level** | Dedicated package facades and contract tests exist | All legacy root call sites have not been migrated to the new packages |
+| L9 | Better Auth runtime | **Not Finished** | Compatibility package/config exists | Actual Better Auth organization, passkey, TOTP, OAuth, session, invitation, and Prisma runtime is not fully wired |
+| L10 | Provider-specific social adapters | **Not Finished** | Postiz-compatible registry exists | Provider-specific upload/poll/error/compliance behavior is not fully implemented |
+| L11 | Stripe/Lago lifecycle | **Not Finished** | Models and adapter boundaries exist | Complete customer, subscription, checkout, portal, webhook, and credit reconciliation runtime is absent |
+| L12 | Deep evidence extraction | **Not Finished** | ffprobe, optional PySceneDetect, FFmpeg audio windows, normalized persistence exist | WhisperX/diarization/RF-DETR/PaddleOCR/librosa execution is still optional or empty in the worker |
+| L13 | Complete transcript service | **Not Finished** | Normalizer and provider boundary exist | Deepgram request lifecycle, usage, retries, diarization, and configured fallback are absent |
+| L14 | Provider-backed AI Director | **Not Finished** | Versioned prompts, deterministic planner, memory and skill contracts exist | Live provider routing, retrieval-ranked context, structured-output retries, and usage reconciliation are absent |
+| L15 | Complete intelligent EDL | **Not Finished** | Structured beats, captions, audio, motion, and decision contracts exist | Source-range editing, dead-air removal, pacing analysis, and semantic cut execution are not complete |
+| L16 | Full OTIO pipeline | **Not Finished** | OTIO bridge boundary exists | Complete plan-to-OTIO conversion, validation, round trip, and render handoff are not complete |
+| L17 | Motion Canvas primitive library | **Not Finished** | Kinetic-caption scene boundary exists | Complete reusable primitive registry and production render orchestration are not complete |
+| L18 | Deterministic renderer | **Not Finished** | Local FFmpeg baseline and provenance fields exist | Complete OTIO/Motion Canvas composition, font handling, audio muxing, multi-format output, and manifest persistence are not complete |
+| L19 | Beat-level scoped repair | **Not Finished** | Repair scope/preserve records and two-attempt gate exist | Actual selective patch rendering and unaffected-region preservation are not complete |
+| L20 | Specialized QA runtime | **Not Finished** | Taxonomy, judges, and evaluation records exist | Real frame/audio/transcript/rights signals are not connected to every judge |
+| L21 | Benchmark/autonomy harness | **Finished at structural code level** | `pnpm benchmark:editor` passes all structural gates | Real licensed agency benchmark data and empirical thresholds remain External |
+| L22 | Cost/failure/learning loop | **Not Finished** | Quota/retry/recommendation boundaries exist | Editor-specific usage, cost, repair success, approval latency, and feedback persistence are not fully connected |
+| L23 | Repurposing engine | **Not Finished** | Campaign/daily/media contracts exist | Full candidate extraction, scoring, vertical transformation, review, and output linkage are not proven end to end |
+| L24 | Analytics ingestion | **Not Finished** | Normalization/scoring contracts exist | Scheduled provider ingestion, deduplication, backfill, and strategy feedback jobs are incomplete |
+| L25 | Experiment lifecycle | **Not Finished** | GrowthBook adapter boundary exists | Assignment persistence, exposure events, analysis, and decision lifecycle are incomplete |
+| L26 | Notifications/webhooks | **Not Finished** | Novu/Svix-compatible boundaries and routes exist | Signed delivery, retries, replay, dead-letter recovery, and delivery metrics are incomplete |
+| L27 | Search/provider health | **Not Finished** | Health routes and basic limits exist | Standardized indexed search, pagination enforcement, capability probes, and health history are incomplete |
+| L28 | Public SDK/API documentation | **Finished at boundary level** | `packages/sdk` and `docs/openapi.json` exist | Full generated SDK from every route remains incomplete |
+| L29 | Retention/deletion/restore automation | **Not Finished** | Operations models and restore routes exist | Scheduled retention workers, deletion proofs, and automated restore drills are incomplete |
+| L30 | Load testing | **Finished at local harness level** | `pnpm test:load` runs a concurrent latency harness | Production-scale results require an external deployed environment |
+| L31 | Integration testing | **Finished at harness level** | `pnpm test:integration` exists and skips explicitly without `INTEGRATION_BASE_URL` | Real PostgreSQL/Redis/R2/provider integration execution requires a configured environment |
+| L32 | Frontend live-data wiring | **Partially Finished** | Editor now refreshes persisted project, plans, beats, renders, evaluations, hooks, and API state; System Map is wired | Other product views still contain demo/static sections and do not all have complete live mutation/query states |
+| L33 | Responsive visual QA | **Partially Finished** | Playwright Chromium E2E passes for the Studio/System Map desktop flow | Full route-by-route desktop/mobile screenshot matrix and visual regression approval are absent |
+
+### Recheck result
+
+Rows marked **Finished at boundary level** are complete as local architecture contracts, not as cloud-activated services. Rows marked **Not Finished** still contain local implementation work and must not be described as complete. Rows marked **Partially Finished** have a verified working subset but still need the stated local work.

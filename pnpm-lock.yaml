@@ -112,6 +112,12 @@ importers:
         specifier: ^5.7.0
         version: 5.9.3
 
+  apps/admin:
+    dependencies:
+      '@creozentic/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+
   apps/api:
     dependencies:
       '@nestjs/common':
@@ -133,6 +139,8 @@ importers:
         specifier: ^7.8.2
         version: 7.8.2
 
+  apps/web: {}
+
   apps/worker:
     dependencies:
       '@creozentic/video':
@@ -148,19 +156,57 @@ importers:
         specifier: ^4.23.12
         version: 4.23.12
 
+  packages/ai: {}
+
+  packages/analytics: {}
+
   packages/auth:
     dependencies:
       zod:
         specifier: ^4.4.3
         version: 4.4.3
 
+  packages/billing: {}
+
+  packages/config: {}
+
+  packages/contracts: {}
+
+  packages/db: {}
+
+  packages/events: {}
+
+  packages/feature-flags: {}
+
+  packages/logger: {}
+
   packages/platform: {}
+
+  packages/queue:
+    dependencies:
+      '@creozentic/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+
+  packages/sdk:
+    dependencies:
+      '@creozentic/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+
+  packages/security: {}
 
   packages/social:
     dependencies:
       zod:
         specifier: ^4.4.3
         version: 4.4.3
+
+  packages/storage: {}
+
+  packages/strategy: {}
+
+  packages/ui: {}
 
   packages/video: {}
 
