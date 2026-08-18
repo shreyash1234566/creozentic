@@ -3,6 +3,16 @@ import { getRequestContext } from "../../../../../src/server/auth";
 import { jsonError, ApiError } from "../../../../../src/server/api";
 import { integrationRegistry } from "../../../../../src/server/integration-registry";
 
+export async function GET(_request: Request, { params }: { params: Promise<{ kind: string }> }) {
+  const { kind } = await params;
+  if (kind !== "references")
+    return NextResponse.json(
+      { error: { code: "INTEGRATION_NOT_FOUND", message: `Unknown integration: ${kind}` } },
+      { status: 404 },
+    );
+  return NextResponse.json({ data: integrationRegistry().references });
+}
+
 export async function POST(request: Request, { params }: { params: Promise<{ kind: string }> }) {
   try {
     const context = await getRequestContext(request);

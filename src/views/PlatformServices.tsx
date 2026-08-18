@@ -1,6 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Btn, PageHeader, Panel } from "../ui";
-import { runPlatformIntegration, type PlatformIntegrationKind } from "../client/api";
+import {
+  getReferenceIntegrations,
+  runPlatformIntegration,
+  type PlatformIntegrationKind,
+  type ReferenceIntegrationStatus,
+} from "../client/api";
 import { useStore } from "../store";
 
 const services: Array<{
@@ -47,6 +52,13 @@ export default function PlatformServices() {
   const [busy, setBusy] = useState<string>("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [references, setReferences] = useState<ReferenceIntegrationStatus[]>([]);
+  useEffect(() => {
+    if (backendEnabled)
+      void getReferenceIntegrations()
+        .then(setReferences)
+        .catch(() => setReferences([]));
+  }, [backendEnabled]);
   const run = async (service: (typeof services)[number]) => {
     setBusy(service.id);
     setMessage("");
@@ -121,6 +133,35 @@ export default function PlatformServices() {
           </Panel>
         ))}
       </div>
+      <Panel title="Cloned reference integrations">
+        <div className="space-y-2">
+          {references.length ? (
+            references.map((reference) => (
+              <div
+                key={reference.id}
+                className="flex flex-col gap-2 rounded-xl border border-line p-3 md:flex-row md:items-center md:justify-between"
+              >
+                <div>
+                  <div className="font-mono text-[10px] uppercase tracking-[0.12em]">
+                    {reference.id}
+                  </div>
+                  <div className="mt-1 text-xs text-ink-soft">{reference.repository}</div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="font-mono text-[9px] text-ink-soft">{reference.revision}</span>
+                  <span className="rounded-full bg-leaf/10 px-2 py-1 font-mono text-[9px] uppercase text-leaf">
+                    {reference.wired ? "wired" : "not wired"}
+                  </span>
+                </div>
+              </div>
+            ))
+          ) : (
+            <p className="text-sm text-ink-soft">
+              Enable the backend to inspect the six runtime reference boundaries.
+            </p>
+          )}
+        </div>
+      </Panel>
       <Panel title="Authentication & social adapters">
         <div className="grid gap-3 md:grid-cols-3">
           {[

@@ -6,9 +6,11 @@ import {
 } from "../../packages/platform/src/index";
 import { HttpSocialAdapter } from "../../packages/social/src/index";
 import { configuredGateway } from "./provider-adapters";
+import { referenceCoverage } from "../../packages/platform/src/reference-integrations";
 
 export function integrationRegistry(env: NodeJS.ProcessEnv = process.env) {
   return {
+    references: referenceCoverage(),
     ai: {
       gemini: configuredGateway("gemini", env),
       openai: configuredGateway("openai", env),

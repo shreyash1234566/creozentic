@@ -1157,3 +1157,14 @@ export async function runPlatformIntegration(
     body: JSON.stringify(input),
   });
 }
+
+export type ReferenceIntegrationStatus = {
+  id: string;
+  repository: string;
+  revision: string;
+  boundary: string;
+  wired: boolean;
+};
+export async function getReferenceIntegrations() {
+  return request<ReferenceIntegrationStatus[]>("/api/v1/integrations/references");
+}
