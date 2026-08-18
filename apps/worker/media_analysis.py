@@ -7,6 +7,7 @@ MediaEvidence contract.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -35,6 +36,36 @@ def ffprobe_media(path: str) -> dict[str, Any]:
     return {"durationSec": float(payload.get("format", {}).get("duration", 0)), "streams": payload.get("streams", [])}
 
 
+def audio_windows_from_ffmpeg(path: str, duration_sec: float) -> list[dict[str, Any]]:
+    """Return bounded one-second audio windows with silence/energy metadata.
+
+    This is intentionally deterministic and dependency-light. Rich spectral features
+    remain optional behind librosa in the production worker image.
+    """
+    if duration_sec <= 0:
+        return []
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-i", path, "-af", "silencedetect=noise=-35dB:d=0.15", "-f", "null", "-"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    silence_starts = [float(match.group(1)) for match in re.finditer(r"silence_start: ([0-9.]+)", result.stderr)]
+    silence_ends = [float(match.group(1)) for match in re.finditer(r"silence_end: ([0-9.]+)", result.stderr)]
+    windows: list[dict[str, Any]] = []
+    cursor = 0.0
+    while cursor < duration_sec:
+        end = min(cursor + 1.0, duration_sec)
+        silent = any(start <= cursor < (silence_ends[index] if index < len(silence_ends) else duration_sec) for index, start in enumerate(silence_starts))
+        windows.append({"startSec": cursor, "endSec": end, "features": {"silent": silent, "source": "ffmpeg-silencedetect-v1"}})
+        cursor = end
+    return windows
+
+
 def analyze_media(path: str, language: str | None = None) -> EvidenceBundle:
     media = ffprobe_media(path)
     # The heavy models are imported lazily so metadata-only jobs do not require GPU libraries.
@@ -42,7 +73,7 @@ def analyze_media(path: str, language: str | None = None) -> EvidenceBundle:
     shot_boundaries: list[dict[str, Any]] = []
     detected_entities: list[dict[str, Any]] = []
     ocr_regions: list[dict[str, Any]] = []
-    audio_windows: list[dict[str, Any]] = []
+    audio_windows: list[dict[str, Any]] = audio_windows_from_ffmpeg(path, float(media.get("durationSec", 0)))
 
     try:
         from scenedetect import open_video, SceneManager

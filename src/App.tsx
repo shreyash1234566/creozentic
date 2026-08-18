@@ -27,6 +27,7 @@ import DailyAutopilot from "./views/DailyAutopilot";
 import Campaigns from "./views/Campaigns";
 import CreateCampaign from "./views/CreateCampaign";
 import PlatformServices from "./views/PlatformServices";
+import SystemMap from "./views/SystemMap";
 
 type Role =
   | "OWNER"
@@ -66,6 +67,7 @@ const NAV: NavItem[] = [
   { id: "performance", label: "Results", glyph: "◭", group: "Control" },
   { id: "connectors", label: "Automation", glyph: "⇄", group: "Control", minRole: "EDITOR" },
   { id: "platform", label: "Platform Services", glyph: "⌁", group: "Control", minRole: "EDITOR" },
+  { id: "system-map", label: "System Map", glyph: "⌗", group: "Control", minRole: "EDITOR" },
   {
     id: "composer",
     label: "Safe Editor",
@@ -209,6 +211,8 @@ function Shell({ initialView, onHome }: { initialView: string; onHome: () => voi
         return <Connectors />;
       case "platform":
         return <PlatformServices />;
+      case "system-map":
+        return <SystemMap />;
       case "scheduler":
         return <Scheduler />;
       case "performance":

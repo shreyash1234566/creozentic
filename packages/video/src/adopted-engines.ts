@@ -10,7 +10,10 @@ export type CoreEngineId =
   | "videodb-director"
   | "remotion"
   | "comfyui"
-  | "temporal";
+  | "temporal"
+  | "openchatcut"
+  | "openmontage"
+  | "twick";
 
 export type CoreEngineRole =
   | "repurposing"
@@ -19,7 +22,9 @@ export type CoreEngineRole =
   | "generation"
   | "video-search"
   | "rendering"
-  | "durable-workflow";
+  | "durable-workflow"
+  | "editing"
+  | "motion-composition";
 
 export interface CoreEngineManifest {
   id: CoreEngineId;
@@ -144,6 +149,42 @@ export const CORE_ENGINE_MANIFEST: readonly CoreEngineManifest[] = [
     entrypoint: "Temporal service / TypeScript SDK",
     enabledBy: "TEMPORAL_ENABLED",
     externalActivation: "Temporal service deployment and namespace",
+  },
+  {
+    id: "openchatcut",
+    name: "OpenChatCut",
+    repository: "https://github.com/robertwyq/OpenChatCut",
+    revision: "pinned-reference",
+    license: "AGPL-3.0",
+    role: "editing",
+    sourceRoot: `${refRoot}/openchatcut`,
+    entrypoint: "package.json scripts / CLI",
+    enabledBy: "OPENCHATCUT_ENABLED",
+    externalActivation: "AGPL review and isolated runtime",
+  },
+  {
+    id: "openmontage",
+    name: "OpenMontage",
+    repository: "https://github.com/creozentic/openmontage",
+    revision: "pinned-reference",
+    license: "AGPL-3.0",
+    role: "motion-composition",
+    sourceRoot: `${refRoot}/openmontage`,
+    entrypoint: "package.json scripts / renderer",
+    enabledBy: "OPENMONTAGE_ENABLED",
+    externalActivation: "AGPL review and renderer runtime",
+  },
+  {
+    id: "twick",
+    name: "Twick",
+    repository: "https://github.com/twickjs/twick",
+    revision: "pinned-reference",
+    license: "Sustainable Use License 1.0",
+    role: "motion-composition",
+    sourceRoot: `${refRoot}/twick`,
+    entrypoint: "package.json scripts / CLI",
+    enabledBy: "TWICK_ENABLED",
+    externalActivation: "License review and Node rendering runtime",
   },
 ];
 

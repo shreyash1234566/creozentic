@@ -13,6 +13,9 @@ This document records the open-source projects used as bounded core-media integr
 | Remotion             | https://www.remotion.dev/                          | React/TypeScript composition and rendering option                                           | `packages/video/src/adopted-engines.ts`, `REMOTION_ENABLED` | Organization and automated-use terms must be approved |
 | ComfyUI              | https://github.com/Comfy-Org/ComfyUI               | Optional isolated GPU generation worker                                                     | `packages/video/src/adopted-engines.ts`, `COMFYUI_ENABLED`  | GPL-3.0; isolate and obtain legal approval            |
 | Temporal             | https://github.com/temporalio/temporal             | Durable execution option for long-running jobs and approvals                                | `packages/video/src/adopted-engines.ts`, `TEMPORAL_ENABLED` | Review server/SDK terms before deployment             |
+| OpenChatCut          | https://github.com/robertwyq/OpenChatCut           | Isolated raw-footage editing reference                                                      | `apps/worker/adopted_core.py`, `OPENCHATCUT_ENABLED`        | AGPL-3.0; isolate and obtain legal approval           |
+| OpenMontage          | https://github.com/creozentic/openmontage          | Motion-composition reference                                                                | `apps/worker/adopted_core.py`, `OPENMONTAGE_ENABLED`        | AGPL-3.0; isolate and obtain legal approval           |
+| Twick                | https://github.com/twickjs/twick                   | Node motion-composition reference                                                           | `apps/worker/adopted_core.py`, `TWICK_ENABLED`              | Sustainable Use License; review before deployment     |
 
 ## Activation rule
 

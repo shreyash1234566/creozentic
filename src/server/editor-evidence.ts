@@ -102,7 +102,10 @@ function normalizeOcr(value: unknown): EvidenceBundle["ocrRegions"] {
   });
 }
 
-export async function extractMediaEvidence(input: { assetPath: string; language?: string }): Promise<EvidenceBundle> {
+export async function extractMediaEvidence(input: {
+  assetPath: string;
+  language?: string;
+}): Promise<EvidenceBundle> {
   const { stdout } = await execFileAsync(
     process.env.FFPROBE_PATH ?? "ffprobe",
     [

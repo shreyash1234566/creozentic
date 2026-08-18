@@ -449,23 +449,50 @@ export async function analyzeEditorProject(
         });
       if (extracted.shots.length)
         await tx.shotBoundary.createMany({
-          data: extracted.shots.map((shot) => ({ evidenceId: media.id, startSec: shot.startSec, endSec: shot.endSec, confidence: shot.confidence })),
+          data: extracted.shots.map((shot) => ({
+            evidenceId: media.id,
+            startSec: shot.startSec,
+            endSec: shot.endSec,
+            confidence: shot.confidence,
+          })),
         });
       if (extracted.audioWindows.length)
         await tx.audioFeatureWindow.createMany({
-          data: extracted.audioWindows.map((window) => ({ evidenceId: media.id, startSec: window.startSec, endSec: window.endSec, features: json(window.features) })),
+          data: extracted.audioWindows.map((window) => ({
+            evidenceId: media.id,
+            startSec: window.startSec,
+            endSec: window.endSec,
+            features: json(window.features),
+          })),
         });
       if (extracted.entities.length)
         await tx.detectedEntity.createMany({
-          data: extracted.entities.map((entity) => ({ evidenceId: media.id, label: entity.label, confidence: entity.confidence, region: entity.region ? json(entity.region) : undefined })),
+          data: extracted.entities.map((entity) => ({
+            evidenceId: media.id,
+            label: entity.label,
+            confidence: entity.confidence,
+            region: entity.region ? json(entity.region) : undefined,
+          })),
         });
       if (extracted.ocrRegions.length)
         await tx.oCRRegion.createMany({
-          data: extracted.ocrRegions.map((region) => ({ evidenceId: media.id, text: region.text, confidence: region.confidence, region: json(region.region) })),
+          data: extracted.ocrRegions.map((region) => ({
+            evidenceId: media.id,
+            text: region.text,
+            confidence: region.confidence,
+            region: json(region.region),
+          })),
         });
       if (extracted.regions.length)
         await tx.evidenceRegion.createMany({
-          data: extracted.regions.map((region) => ({ evidenceId: media.id, label: region.label, x: region.x, y: region.y, width: region.width, height: region.height })),
+          data: extracted.regions.map((region) => ({
+            evidenceId: media.id,
+            label: region.label,
+            x: region.x,
+            y: region.y,
+            width: region.width,
+            height: region.height,
+          })),
         });
     }
     return tx.mediaEvidence.findMany({

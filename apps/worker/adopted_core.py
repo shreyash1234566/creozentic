@@ -51,6 +51,21 @@ ENGINES: dict[str, dict[str, Any]] = {
         "license": "MIT",
         "commands": {"direct": ["python3", "-m", "backend"]},
     },
+    "openchatcut": {
+        "repo": ROOT / "openchatcut",
+        "license": "AGPL-3.0",
+        "commands": {"direct": ["pnpm", "run", "start"]},
+    },
+    "openmontage": {
+        "repo": ROOT / "openmontage",
+        "license": "AGPL-3.0",
+        "commands": {"direct": ["pnpm", "run", "render"]},
+    },
+    "twick": {
+        "repo": ROOT / "twick",
+        "license": "Sustainable Use License 1.0",
+        "commands": {"direct": ["pnpm", "run", "render"]},
+    },
 }
 
 

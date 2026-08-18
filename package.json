@@ -14,10 +14,12 @@
     "db:seed": "tsx prisma/seed.ts",
     "worker": "tsx src/server/worker.ts",
     "test:production-smoke": "tsx scripts/production-smoke.ts",
-    "test:unit": "tsx --test tests/core-contracts.test.ts tests/editor-contracts.test.ts tests/guide-complete-contracts.test.ts tests/adopted-engines.test.ts",
+    "test:e2e": "playwright test",
+    "test:unit": "tsx --test tests/core-contracts.test.ts tests/editor-contracts.test.ts tests/guide-complete-contracts.test.ts tests/adopted-engines.test.ts tests/media-evidence.test.ts",
     "test": "pnpm test:unit && pnpm test:production-smoke",
     "format": "oxfmt",
-    "guide:check": "tsx scripts/guide-completeness.ts"
+    "guide:check": "tsx scripts/guide-completeness.ts",
+    "oss:check": "tsx scripts/oss-completeness.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1107.0",
@@ -46,6 +48,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@tailwindcss/postcss": "4.2.1",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",

@@ -17,6 +17,9 @@ test("selected core projects have traceable roles and provenance", () => {
     "remotion",
     "comfyui",
     "temporal",
+    "openchatcut",
+    "openmontage",
+    "twick",
   ]) {
     assert.ok(ids.includes(id as (typeof ids)[number]), `${id} missing from core manifest`);
   }
