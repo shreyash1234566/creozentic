@@ -1,0 +1,1 @@
+{"nodes": [{"id": "$graphify-root$_config_template_coverage_test_go", "label": "template_coverage_test.go", "file_type": "code", "source_file": "config/template_coverage_test.go", "source_location": "L1"}], "edges": [], "raw_calls": [], "go_imports": {}}

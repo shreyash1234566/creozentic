@@ -1,0 +1,2902 @@
+import io
+import json
+import os
+import pathlib
+import time
+import urllib.parse
+from typing import Any, Callable, Literal
+
+import av
+import httpx
+import numpy as np
+import PIL.Image
+import pydantic
+import pytest
+import sqlalchemy as sql
+
+import pixeltable as pxt
+import pixeltable.functions.json as pxt_json
+from pixeltable.env import Env
+from tests.utils import (
+    CatalogMode,
+    get_audio_files,
+    get_image_files,
+    get_video_files,
+    pxt_raises,
+    skip_test_if_not_installed,
+    sleep,
+)
+
+
+@pxt.udf
+def json_embed_ndarray(i: int) -> pxt.Json:
+    return {'vec': np.zeros(3, dtype=np.float32), 'k': i}
+
+
+@pxt.udf
+def json_embed_image(i: int) -> pxt.Json:
+    return {'img': PIL.Image.new('RGB', (4, 4)), 'k': i}
+
+
+@pxt.udf
+def json_embed_bytes(i: int) -> pxt.Json:
+    return {'blob': b'\x00\x01\x02', 'k': i}
+
+
+def add_dml_route(route_type: str, router: Any, t: pxt.Table, **kwargs: Any) -> None:
+    """Dispatch helper: register an insert/compute/update route on router for table t."""
+    match route_type:
+        case 'insert':
+            router.add_insert_route(t, **kwargs)
+        case 'compute':
+            router.add_compute_route(t, **kwargs)
+        case 'update':
+            router.add_update_route(t, **kwargs)
+        case _:
+            raise ValueError(f'unknown route_type: {route_type}')
+
+
+def dml_decorator(route_type: str, router: Any) -> Any:
+    """Dispatch helper: return the insert/compute/update route decorator on router."""
+    match route_type:
+        case 'insert':
+            return router.insert_route
+        case 'compute':
+            return router.compute_route
+        case 'update':
+            return router.update_route
+        case _:
+            raise ValueError(f'unknown route_type: {route_type}')
+
+
+def single_row(resp_body: Any, route_type: str) -> Any:
+    """insert/update, base-table compute, and no-iterator-view compute all return a single JSON object."""
+    assert isinstance(resp_body, dict), resp_body
+    return resp_body
+
+
+@pxt.udf
+def add_one(x: int) -> int:
+    return x + 1
+
+
+# ---------------------------------------------------------------------------
+# Test helpers
+# ---------------------------------------------------------------------------
+
+
+def make_test_client(router: Any) -> Any:
+    """Create a FastAPI app, include `router`, and return a TestClient."""
+    import fastapi
+    from fastapi.testclient import TestClient
+
+    app = fastapi.FastAPI()
+    app.include_router(router)
+    return TestClient(app)
+
+
+def make_media_poster(
+    client: Any, media_path: str, media_col: str, mime_type: str, use_uploadfile: bool
+) -> Callable[..., Any]:
+    """Return a POST helper that sends `media_path` to `path` with extra scalar fields."""
+
+    def post(path: str, row_id: int, **fields: Any) -> Any:
+        if use_uploadfile:
+            with open(media_path, 'rb') as f:
+                data = f.read()
+            return client.post(
+                path,
+                files={media_col: (os.path.basename(media_path), data, mime_type)},
+                data={'id': str(row_id), **{k: str(v) for k, v in fields.items()}},
+            )
+        return client.post(path, json={'id': row_id, media_col: media_path, **fields})
+
+    return post
+
+
+def await_background_job(
+    client: Any, job: dict[str, Any], *, timeout: float = 30.0, require_pending: bool = True
+) -> dict[str, Any]:
+    """Poll `job['job_url']` until terminal; validate structure and return the status body."""
+    assert isinstance(job.get('id'), str) and len(job['id']) > 0
+    assert isinstance(job.get('job_url'), str) and '/jobs/' in job['job_url'] and job['id'] in job['job_url']
+    saw_pending = False
+    deadline = time.time() + timeout
+    while True:
+        status_resp = client.get(job['job_url'])
+        assert status_resp.status_code == 200, status_resp.text
+        body = status_resp.json()
+        assert body['status'] in ('pending', 'done', 'error')
+        if body['status'] == 'pending':
+            saw_pending = True
+            assert body.get('result') is None and body.get('error') is None
+            assert time.time() < deadline, f'job {job["id"]} still pending after {timeout}s'
+            time.sleep(0.05)
+            continue
+        if body['status'] == 'error':
+            raise AssertionError(f'background job failed: {body.get("error")}')
+        assert body['status'] == 'done' and body.get('error') is None
+        assert body.get('result') is not None
+        if require_pending:
+            assert saw_pending, 'polling never observed pending - sleep column not delaying'
+        return body
+
+
+def get_media(client: Any, url: str) -> Any:
+    """GET a media URL. A router-served URL goes through the TestClient; a proxy-daemon URL (which carries a real
+    loopback host:port) is fetched directly, since the router can't serve the daemon's media store."""
+    parsed = urllib.parse.urlparse(url)
+    if parsed.hostname is not None and parsed.hostname != 'testserver':
+        return httpx.get(url)
+    return client.get(url)
+
+
+def assert_media_fetchable(client: Any, url: str, local_path: str, *, label: str = '') -> None:
+    """Assert `url` is a /media/ URL, returns 200, and its bytes match `local_path`."""
+    tag = f'{label}: ' if label else ''
+    assert '/media/' in url, f'{tag}expected /media/ URL, got: {url}'
+    resp = get_media(client, url)
+    assert resp.status_code == 200, f'{tag}{resp.text}'
+    with open(local_path, 'rb') as f:
+        assert resp.content == f.read(), f'{tag}downloaded bytes differ from stored file'
+
+
+def assert_fileresponse_ok(resp: Any, local_path: str, mime_prefix: str) -> None:
+    """Assert `resp` is a 200 FileResponse with the right content-type and matching bytes."""
+    assert resp.status_code == 200, resp.text
+    assert resp.headers['content-type'].startswith(mime_prefix), resp.headers['content-type']
+    with open(local_path, 'rb') as f:
+        assert resp.content == f.read()
+
+
+def assert_image_bytes(data: bytes, *, size: tuple[int, int] | None = None) -> None:
+    """Decode data as an image; optionally assert dimensions."""
+    PIL.Image.open(io.BytesIO(data)).verify()  # raises on truncated/corrupt
+    if size is not None:
+        assert PIL.Image.open(io.BytesIO(data)).size == size
+
+
+def assert_video_bytes(data: bytes, *, width: int | None = None, height: int | None = None) -> None:
+    """Decode data as video; optionally assert frame dimensions."""
+    with av.open(io.BytesIO(data)) as container:
+        stream = container.streams.video[0]
+        if width is not None:
+            assert stream.codec_context.width == width, (stream.codec_context.width, width)
+        if height is not None:
+            assert stream.codec_context.height == height, (stream.codec_context.height, height)
+
+
+def assert_audio_bytes(data: bytes, *, duration_s: float | None = None, tol: float = 0.1) -> None:
+    """Decode data as audio; optionally assert duration in seconds within tol."""
+    with av.open(io.BytesIO(data)) as container:
+        stream = container.streams.audio[0]
+        if duration_s is not None:
+            actual = float(stream.duration * stream.time_base)
+            assert abs(actual - duration_s) <= tol, (actual, duration_s)
+
+
+def fetch_and_decode_media(client: Any, url: str, decoder: Callable[..., None], **kwargs: Any) -> None:
+    """GET url, assert 200, then decode the bytes with decoder(bytes, **kwargs)."""
+    assert '/media/' in url, f'expected /media/ URL, got: {url}'
+    resp = get_media(client, url)
+    assert resp.status_code == 200, resp.text
+    decoder(resp.content, **kwargs)
+
+
+def make_sqlite_target(
+    db_path: pathlib.Path,
+    table_name: str,
+    columns: dict[str, type[sql.types.TypeEngine]],
+    pk_cols: list[str] | None = None,
+) -> str:
+    """Pre-create a sqlite table; return the SQLAlchemy connect string."""
+    connect = f'sqlite:///{db_path}'
+    eng = sql.create_engine(connect)
+    pk_set = set(pk_cols or [])
+    sql.Table(
+        table_name,
+        sql.MetaData(),
+        *[sql.Column(name, sa_type(), primary_key=name in pk_set) for name, sa_type in columns.items()],
+    ).create(eng)
+    eng.dispose()
+    return connect
+
+
+def assert_sqlite_row(connect: str, table_name: str, where: dict[str, Any], expected: dict[str, Any]) -> None:
+    """SELECT a row matching `where` and assert each `expected` column equals.
+    JSON columns store as text in sqlite; decode dict/list values lazily."""
+    eng = sql.create_engine(connect)
+    try:
+        clause = ' AND '.join(f'{c} = :{c}' for c in where)
+        with eng.connect() as conn:
+            row = conn.execute(sql.text(f'SELECT * FROM {table_name} WHERE {clause}'), where).mappings().fetchone()
+    finally:
+        eng.dispose()
+    assert row is not None, f'no row in {table_name} matching {where}'
+    for k, v in expected.items():
+        actual = json.loads(row[k]) if isinstance(v, (dict, list)) else row[k]
+        assert actual == v, (k, actual, v)
+
+
+class TestFastAPI:
+    @pytest.mark.parametrize('route_type', ['insert', 'compute', 'compute_view'])
+    def test_add_insert_route_scalars(
+        self,
+        make_catalog_path: Callable[[str], str],
+        tmp_path: pathlib.Path,
+        route_type: Literal['insert', 'compute', 'compute_view'],
+    ) -> None:
+        """Test insert routes with all scalar types and various input/output combinations."""
+        p = make_catalog_path
+        skip_test_if_not_installed('fastapi')
+        from pixeltable.serving import FastAPIRouter, SqlExport
+
+        pxt.create_dir(p('test_serve'))
+        t = pxt.create_table(
+            p('test_serve.scalars'),
+            {
+                'id': pxt.Int | None,
+                'str_col': pxt.String | None,
+                'int_col': pxt.Int | None,
+                'float_col': pxt.Float | None,
+                'bool_col': pxt.Bool | None,
+                'json_col': pxt.Json | None,
+            },
+        )
+        t.add_computed_column(str_upper=t.str_col.upper())
+        t.add_computed_column(int_plus1=t.int_col + 1)
+        t.add_computed_column(float_abs=t.float_col.abs())
+        t.add_computed_column(json_str=pxt_json.dumps(t.json_col))
+
+        # compute_view: register the compute routes against a plain view of t; the view's compute()
+        # takes base-table rows and returns view rows, which for a filterless non-iterator view are
+        # the same as the table's
+        target: pxt.Table = t
+        if route_type == 'compute_view':
+            target = pxt.create_view(p('test_serve.scalars_view'), t)
+
+        # sqlite targets for export_sql coverage
+        db_path = tmp_path / 'export.db'
+        all_cols: dict[str, type[sql.types.TypeEngine]] = {
+            'id': sql.Integer,
+            'str_col': sql.VARCHAR,
+            'int_col': sql.Integer,
+            'float_col': sql.Float,
+            'bool_col': sql.Boolean,
+            'json_col': sql.JSON,
+            'str_upper': sql.VARCHAR,
+            'int_plus1': sql.Integer,
+            'float_abs': sql.Float,
+            'json_str': sql.VARCHAR,
+        }
+        db_connect = make_sqlite_target(db_path, 'out_all', all_cols)
+        make_sqlite_target(db_path, 'out_minimal', {'int_plus1': sql.Integer})
+        # update-mode target: PK on id, pre-populated with a baseline row keyed on id=42
+        make_sqlite_target(
+            db_path,
+            'out_update',
+            {'id': sql.Integer, 'str_upper': sql.VARCHAR, 'int_plus1': sql.Integer},
+            pk_cols=['id'],
+        )
+        eng = sql.create_engine(db_connect)
+        with eng.connect() as conn:
+            conn.execute(sql.text("INSERT INTO out_update (id, str_upper, int_plus1) VALUES (42, 'OLD', 0)"))
+            conn.commit()
+        eng.dispose()
+
+        router = FastAPIRouter()
+        add_route_fn = router.add_insert_route if route_type == 'insert' else router.add_compute_route
+        # default inputs and outputs; with export_sql to out_all
+        add_route_fn(target, path='/all', export_sql=SqlExport(db_connect=db_connect, table='out_all'))
+        # subset of inputs, all outputs
+        add_route_fn(target, path='/partial-in', inputs=['id', 'str_col', 'int_col'])
+        # all inputs, subset of outputs
+        add_route_fn(target, path='/partial-out', outputs=['id', 'str_upper', 'int_plus1'])
+        # minimal inputs and outputs; with export_sql to out_minimal (same db_connect)
+        add_route_fn(
+            target,
+            path='/minimal',
+            inputs=['id', 'int_col'],
+            outputs=['int_plus1'],
+            export_sql=SqlExport(db_connect=db_connect, table='out_minimal'),
+        )
+        # update-mode export: pxt insert triggers a UPDATE on the target keyed on id
+        add_route_fn(
+            target,
+            path='/update',
+            inputs=['id', 'str_col', 'int_col'],
+            outputs=['id', 'str_upper', 'int_plus1'],
+            export_sql=SqlExport(db_connect=db_connect, table='out_update', method='update'),
+        )
+        # engine cache reuse: three export_sql routes against the same db_connect share one engine
+        assert len(router._engine_cache) == 1
+
+        with make_test_client(router) as client:
+            all_input = {
+                'id': 1,
+                'str_col': 'hello',
+                'int_col': -5,
+                'float_col': -3.14,
+                'bool_col': True,
+                'json_col': {'key': 'value'},
+            }
+            resp = client.post('/all', json=all_input)
+            assert resp.status_code == 200, resp.text
+            expected = {
+                'id': 1,
+                'str_col': 'hello',
+                'int_col': -5,
+                'float_col': -3.14,
+                'bool_col': True,
+                'json_col': {'key': 'value'},
+                'str_upper': 'HELLO',
+                'int_plus1': -4,
+                'float_abs': 3.14,
+                'json_str': json.dumps({'key': 'value'}),
+            }
+            assert single_row(resp.json(), route_type) == expected
+            if route_type == 'insert':
+                row = t.where(t.id == 1).collect()[0]
+                assert row == expected
+            assert_sqlite_row(db_connect, 'out_all', {'id': 1}, expected)
+
+            resp = client.post('/partial-in', json={'id': 2, 'str_col': 'world', 'int_col': 10})
+            assert resp.status_code == 200, resp.text
+            expected = {
+                'id': 2,
+                'str_col': 'world',
+                'int_col': 10,
+                'float_col': None,
+                'bool_col': None,
+                'json_col': None,
+                'str_upper': 'WORLD',
+                'int_plus1': 11,
+                'float_abs': None,
+                'json_str': None,
+            }
+            assert single_row(resp.json(), route_type) == expected
+            if route_type == 'insert':
+                row = t.where(t.id == 2).collect()[0]
+                assert row == expected
+
+            resp = client.post('/partial-out', json={**all_input, 'id': 3})
+            assert resp.status_code == 200, resp.text
+            expected = {'id': 3, 'str_upper': 'HELLO', 'int_plus1': -4}
+            assert single_row(resp.json(), route_type) == expected
+            if route_type == 'insert':
+                row = t.where(t.id == 3).select(t.id, t.str_upper, t.int_plus1).collect()[0]
+                assert row == expected
+
+            resp = client.post('/minimal', json={'id': 4, 'int_col': 99})
+            assert resp.status_code == 200, resp.text
+            expected = {'int_plus1': 100}
+            assert single_row(resp.json(), route_type) == expected
+            if route_type == 'insert':
+                row = t.where(t.id == 4).select(t.int_plus1).collect()[0]
+                assert row == expected
+            assert_sqlite_row(db_connect, 'out_minimal', {'int_plus1': 100}, expected)
+
+            # method='update': pxt insert triggers UPDATE of the existing target row keyed on id=42
+            resp = client.post('/update', json={'id': 42, 'str_col': 'fresh', 'int_col': 7})
+            assert resp.status_code == 200, resp.text
+            expected = {'id': 42, 'str_upper': 'FRESH', 'int_plus1': 8}
+            assert single_row(resp.json(), route_type) == expected
+            # the baseline ('OLD', 0) was replaced by the new values
+            assert_sqlite_row(db_connect, 'out_update', {'id': 42}, expected)
+
+            # method='update' against an id that doesn't exist in the target -> HTTP 500 (zero rowcount)
+            resp = client.post('/update', json={'id': 999, 'str_col': 'ghost', 'int_col': 0})
+            assert resp.status_code == 500, resp.text
+            assert 'expected 1' in resp.json()['detail']
+
+        # exiting the TestClient context fired the lifespan shutdown handler
+        assert router._engine_cache == {}
+
+    @pytest.mark.parametrize('route_type', ['insert', 'compute'])
+    @pytest.mark.parametrize('use_uploadfile', [True, False])
+    def test_add_insert_route_video(
+        self,
+        make_catalog_path: Callable[[str], str],
+        catalog_mode: CatalogMode,
+        use_uploadfile: bool,
+        route_type: Literal['insert', 'compute'],
+    ) -> None:
+        """Test insert/compute routes with video data, including FileResponse and media serving."""
+        skip_test_if_not_installed('fastapi')
+        from pixeltable.serving import FastAPIRouter
+
+        p = make_catalog_path
+        video_path = get_video_files()[0]
+        pxt.create_dir(p('test_serve'))
+        t = pxt.create_table(
+            p('test_serve.videos'),
+            {'id': pxt.Int | None, 'video': pxt.Video | None, 'width': pxt.Int | None, 'height': pxt.Int | None},
+        )
+        t.add_computed_column(resized=t.video.resize(width=t.width, height=t.height))
+        t.add_computed_column(thumbnail=t.video.extract_frame(timestamp=0.0))
+
+        router = FastAPIRouter()
+        add_route_fn = router.add_insert_route if route_type == 'insert' else router.add_compute_route
+        # When uploading, 'video' moves from inputs into uploadfile_inputs. Other inputs
+        # (defaulted for /all, explicit for /resize and /thumbnail) become Form fields
+        # automatically once any upload is present.
+        uploadfile_inputs = ['video'] if use_uploadfile else None
+        # /all: defaults for inputs/outputs (uploadfile_inputs still moves `video` into File)
+        add_route_fn(t, path='/all', uploadfile_inputs=uploadfile_inputs)
+        # /resize: id + video + width, only resized video output
+        add_route_fn(
+            t,
+            path='/resize',
+            inputs=['id', 'width'] if use_uploadfile else ['id', 'video', 'width'],
+            uploadfile_inputs=uploadfile_inputs,
+            outputs=['resized'],
+            return_fileresponse=True,
+        )
+        # /thumbnail: id + video + height, only thumbnail output
+        add_route_fn(
+            t,
+            path='/thumbnail',
+            inputs=['id', 'height'] if use_uploadfile else ['id', 'video', 'height'],
+            uploadfile_inputs=uploadfile_inputs,
+            outputs=['thumbnail'],
+            return_fileresponse=True,
+        )
+        client = make_test_client(router)
+        post = make_media_poster(client, video_path, 'video', 'video/webm', use_uploadfile)
+
+        # route /all: JSON response with media URLs
+        resp = post('/all', 1, width=320, height=240)
+        assert resp.status_code == 200, resp.text
+        result = single_row(resp.json(), route_type)
+        assert result['id'] == 1 and result['width'] == 320 and result['height'] == 240
+
+        # `video` is served as a /media/ URL when it was uploaded, or (over proxy) when a referenced local file
+        # had to be shipped to the daemon; a locally-referenced external file is left as a file:// URL.
+        if use_uploadfile or catalog_mode == 'proxy':
+            assert '/media/' in result['video'], result['video']
+        else:
+            assert result['video'].startswith('file:'), result['video']
+
+        if route_type == 'insert':
+            if catalog_mode == 'local':
+                # storage-location / byte-identity checks only apply when the router and the table share a filesystem
+                media_dir = str(Env.get().media_dir)
+                video_local = t.where(t.id == 1).select(p=t.video.localpath).collect()[0]['p']
+                if use_uploadfile:
+                    assert video_local.startswith(media_dir + os.sep), f'video not under media_dir: {video_local}'
+                    assert_media_fetchable(client, result['video'], video_local)
+                else:
+                    assert not video_local.startswith(media_dir + os.sep), (
+                        f'external video moved into media_dir: {video_local}'
+                    )
+                paths = (
+                    t.where(t.id == 1).select(resized=t.resized.localpath, thumbnail=t.thumbnail.localpath).collect()[0]
+                )
+                for col in ('resized', 'thumbnail'):
+                    assert_media_fetchable(client, result[col], paths[col], label=col)
+            else:
+                # over proxy the media lives on the daemon; verify each output is fetchable through the router
+                for col in ('video', 'resized', 'thumbnail'):
+                    media_resp = get_media(client, result[col])
+                    assert media_resp.status_code == 200, f'{col}: {media_resp.status_code}'
+                    assert len(media_resp.content) > 0, col
+
+            # verify the persisted row (scalar columns round-trip in both modes)
+            row = t.where(t.id == 1).select(t.id, t.width, t.height).collect()[0]
+            assert row == {'id': 1, 'width': 320, 'height': 240}
+
+        # semantic check on computed media (runs in both modes)
+        fetch_and_decode_media(client, result['resized'], assert_video_bytes, width=320, height=240)
+        fetch_and_decode_media(client, result['thumbnail'], assert_image_bytes)
+
+        # route /resize: FileResponse with resized video; width=160, height preserves aspect ratio
+        resp = post('/resize', 2, width=160)
+        assert resp.status_code == 200, resp.text
+        assert resp.headers['content-type'].startswith('video/'), resp.headers['content-type']
+        assert_video_bytes(resp.content, width=160)
+        if route_type == 'insert':
+            resized_path = t.where(t.id == 2).select(p=t.resized.localpath).collect()[0]['p']
+            assert_fileresponse_ok(resp, resized_path, 'video/')
+
+        # route /thumbnail: FileResponse with thumbnail image (extract_frame at t=0)
+        resp = post('/thumbnail', 3, height=120)
+        assert resp.status_code == 200, resp.text
+        assert resp.headers['content-type'].startswith('image/'), resp.headers['content-type']
+        assert_image_bytes(resp.content)
+        if route_type == 'insert':
+            thumbnail_path = t.where(t.id == 3).select(p=t.thumbnail.localpath).collect()[0]['p']
+            assert_fileresponse_ok(resp, thumbnail_path, 'image/')
+
+    @pytest.mark.parametrize('route_type', ['insert', 'compute'])
+    @pytest.mark.parametrize('use_uploadfile', [True, False])
+    def test_add_insert_route_image(
+        self,
+        make_catalog_path: Callable[[str], str],
+        catalog_mode: CatalogMode,
+        use_uploadfile: bool,
+        tmp_path: pathlib.Path,
+        route_type: Literal['insert', 'compute'],
+    ) -> None:
+        """Image counterpart of test_add_insert_route_video. Structurally parallel so the two
+        tests can later be generalized over a media-kind fixture."""
+        skip_test_if_not_installed('fastapi')
+        from pixeltable.serving import FastAPIRouter, SqlExport
+
+        p = make_catalog_path
+        image_path = get_image_files()[0]
+        with PIL.Image.open(image_path) as img:
+            orig_w, orig_h = img.size
+        pxt.create_dir(p('test_serve'))
+        # Unlike video.resize (which tolerates None width/height and preserves aspect ratio),
+        # image.resize requires concrete ints - so width and height must be Required, and every
+        # insert (even the /rotate one, which doesn't care about them) has to supply them.
+        t = pxt.create_table(
+            p('test_serve.images'),
+            {'id': pxt.Int | None, 'image': pxt.Image | None, 'width': pxt.Int, 'height': pxt.Int},
+        )
+        # resized: uses both scalar inputs (mirrors video.resize(width=..., height=...))
+        t.add_computed_column(resized=t.image.resize(size=(t.width, t.height)))
+        # rotated: uses neither scalar input (mirrors video.extract_frame(timestamp=0.0))
+        t.add_computed_column(rotated=t.image.rotate(angle=90))
+
+        # sqlite target with media columns as VARCHAR; exercises SqlExporter media->String coercion
+        db_connect = make_sqlite_target(
+            tmp_path / 'export.db',
+            'img_out',
+            {
+                'id': sql.Integer,
+                'image': sql.VARCHAR,
+                'width': sql.Integer,
+                'height': sql.Integer,
+                'resized': sql.VARCHAR,
+                'rotated': sql.VARCHAR,
+            },
+        )
+
+        router = FastAPIRouter()
+        add_route_fn = router.add_insert_route if route_type == 'insert' else router.add_compute_route
+        # When uploading, 'image' moves from inputs into uploadfile_inputs. Other inputs
+        # (defaulted for /all, explicit for /resize and /rotate) become Form fields
+        # automatically once any upload is present.
+        uploadfile_inputs = ['image'] if use_uploadfile else None
+        # /all: defaults for inputs/outputs (uploadfile_inputs still moves `image` into File);
+        # exports to sqlite to exercise the media->String coercion for both raw and computed media
+        add_route_fn(
+            t,
+            path='/all',
+            uploadfile_inputs=uploadfile_inputs,
+            export_sql=SqlExport(db_connect=db_connect, table='img_out'),
+        )
+        # /resize: id + image + width + height, only resized image output
+        add_route_fn(
+            t,
+            path='/resize',
+            inputs=['id', 'width', 'height'] if use_uploadfile else ['id', 'image', 'width', 'height'],
+            uploadfile_inputs=uploadfile_inputs,
+            outputs=['resized'],
+            return_fileresponse=True,
+        )
+        # /rotate: id + image + width + height, only rotated image output.
+        # width/height are unused by the rotate computation but still required by the schema,
+        # since every insert evaluates the `resized` computed column.
+        add_route_fn(
+            t,
+            path='/rotate',
+            inputs=['id', 'width', 'height'] if use_uploadfile else ['id', 'image', 'width', 'height'],
+            uploadfile_inputs=uploadfile_inputs,
+            outputs=['rotated'],
+            return_fileresponse=True,
+        )
+        client = make_test_client(router)
+        post = make_media_poster(client, image_path, 'image', 'image/jpeg', use_uploadfile)
+
+        # route /all: JSON response with media URLs
+        resp = post('/all', 1, width=128, height=96)
+        assert resp.status_code == 200, resp.text
+        result = single_row(resp.json(), route_type)
+        assert result['id'] == 1 and result['width'] == 128 and result['height'] == 96
+
+        # `image` is served as a /media/ URL when uploaded, or (over proxy) when a referenced local file had to
+        # be shipped to the daemon; a locally-referenced external file is left as a file:// URL.
+        if use_uploadfile or catalog_mode == 'proxy':
+            assert '/media/' in result['image'], result['image']
+        else:
+            assert result['image'].startswith('file:'), result['image']
+        if route_type == 'insert':
+            if catalog_mode == 'local':
+                media_dir = str(Env.get().media_dir)
+                image_local = t.where(t.id == 1).select(p=t.image.localpath).collect()[0]['p']
+                if use_uploadfile:
+                    assert image_local.startswith(media_dir + os.sep), f'image not under media_dir: {image_local}'
+                    assert_media_fetchable(client, result['image'], image_local)
+                else:
+                    assert not image_local.startswith(media_dir + os.sep), (
+                        f'external image moved into media_dir: {image_local}'
+                    )
+                paths = t.where(t.id == 1).select(resized=t.resized.localpath, rotated=t.rotated.localpath).collect()[0]
+                for col in ('resized', 'rotated'):
+                    assert_media_fetchable(client, result[col], paths[col], label=col)
+            else:
+                # over proxy the media lives on the daemon; verify each output is fetchable through the router
+                for col in ('image', 'resized', 'rotated'):
+                    media_resp = get_media(client, result[col])
+                    assert media_resp.status_code == 200, f'{col}: {media_resp.status_code}'
+                    assert len(media_resp.content) > 0, col
+            # verify persisted row
+            row = t.where(t.id == 1).select(t.id, t.width, t.height).collect()[0]
+            assert row == {'id': 1, 'width': 128, 'height': 96}
+        # semantic check on computed media (runs in both modes); PIL's rotate(90) keeps canvas size
+        fetch_and_decode_media(client, result['resized'], assert_image_bytes, size=(128, 96))
+        fetch_and_decode_media(client, result['rotated'], assert_image_bytes, size=(orig_w, orig_h))
+        # verify the row landed in the sqlite target with the same media URLs as the response body
+        # (export_sql writes the response body, so this assertion holds for both insert and compute)
+        assert_sqlite_row(
+            db_connect,
+            'img_out',
+            {'id': 1},
+            {
+                'id': 1,
+                'image': result['image'],
+                'width': 128,
+                'height': 96,
+                'resized': result['resized'],
+                'rotated': result['rotated'],
+            },
+        )
+
+        # route /resize: FileResponse with resized image
+        resp = post('/resize', 2, width=64, height=48)
+        assert resp.status_code == 200, resp.text
+        assert resp.headers['content-type'].startswith('image/'), resp.headers['content-type']
+        assert_image_bytes(resp.content, size=(64, 48))
+        if route_type == 'insert' and catalog_mode == 'local':
+            resized_path = t.where(t.id == 2).select(p=t.resized.localpath).collect()[0]['p']
+            assert_fileresponse_ok(resp, resized_path, 'image/')
+
+        # route /rotate: FileResponse with rotated image.
+        # width/height must be supplied (schema-required) even though the rotation doesn't use them.
+        resp = post('/rotate', 3, width=32, height=24)
+        assert resp.status_code == 200, resp.text
+        assert resp.headers['content-type'].startswith('image/'), resp.headers['content-type']
+        assert_image_bytes(resp.content, size=(orig_w, orig_h))
+        if route_type == 'insert' and catalog_mode == 'local':
+            rotated_path = t.where(t.id == 3).select(p=t.rotated.localpath).collect()[0]['p']
+            assert_fileresponse_ok(resp, rotated_path, 'image/')
+
+    @pytest.mark.parametrize('route_type', ['insert', 'compute'])
+    @pytest.mark.parametrize('use_uploadfile', [True, False])
+    def test_add_insert_route_audio(
+        self,
+        make_catalog_path: Callable[[str], str],
+        catalog_mode: CatalogMode,
+        use_uploadfile: bool,
+        route_type: Literal['insert', 'compute'],
+    ) -> None:
+        """Audio counterpart of test_add_insert_route_video/_image. Structurally parallel so the
+        three tests can later be generalized over a media-kind fixture. Uses the audio UDFs
+        `multiply_volume` (two scalar inputs) and `normalize` (no scalar inputs)."""
+        skip_test_if_not_installed('fastapi')
+        from pixeltable.serving import FastAPIRouter
+
+        p = make_catalog_path
+        # Use sample-16-bit.wav specifically so the mime type in upload mode is deterministic.
+        audio_path = next(f for f in get_audio_files() if f.endswith('sample-16-bit.wav'))
+        pxt.create_dir(p('test_serve'))
+        # factor and end_time are Required because multiply_volume's `factor` param must be non-None
+        # on every insert (the `scaled` computed column runs on every row).
+        t = pxt.create_table(
+            p('test_serve.audios'),
+            {'id': pxt.Int | None, 'audio': pxt.Audio | None, 'factor': pxt.Float, 'end_time': pxt.Float},
+        )
+        # scaled: uses both scalar inputs (mirrors video.resize(width=..., height=...))
+        t.add_computed_column(scaled=t.audio.multiply_volume(factor=t.factor, end_time=t.end_time))
+        # normalized: uses neither scalar input (mirrors video.extract_frame(timestamp=0.0))
+        t.add_computed_column(normalized=t.audio.normalize())
+
+        router = FastAPIRouter()
+        add_route_fn = router.add_insert_route if route_type == 'insert' else router.add_compute_route
+        # When uploading, 'audio' moves from inputs into uploadfile_inputs. Other inputs
+        # (defaulted for /all, explicit for /scale and /normalize) become Form fields
+        # automatically once any upload is present.
+        uploadfile_inputs = ['audio'] if use_uploadfile else None
+        # /all: defaults for inputs/outputs (uploadfile_inputs still moves `audio` into File)
+        add_route_fn(t, path='/all', uploadfile_inputs=uploadfile_inputs)
+        # /scale: id + audio + factor + end_time, only the multiply_volume output
+        add_route_fn(
+            t,
+            path='/scale',
+            inputs=['id', 'factor', 'end_time'] if use_uploadfile else ['id', 'audio', 'factor', 'end_time'],
+            uploadfile_inputs=uploadfile_inputs,
+            outputs=['scaled'],
+            return_fileresponse=True,
+        )
+        # /normalize: id + audio + factor + end_time, only the normalize output.
+        # factor/end_time are unused by the normalize computation but still required by the
+        # schema, since every insert evaluates the `scaled` computed column.
+        add_route_fn(
+            t,
+            path='/normalize',
+            inputs=['id', 'factor', 'end_time'] if use_uploadfile else ['id', 'audio', 'factor', 'end_time'],
+            uploadfile_inputs=uploadfile_inputs,
+            outputs=['normalized'],
+            return_fileresponse=True,
+        )
+        client = make_test_client(router)
+        post = make_media_poster(client, audio_path, 'audio', 'audio/wav', use_uploadfile)
+
+        # route /all: JSON response with media URLs
+        resp = post('/all', 1, factor=0.5, end_time=0.5)
+        assert resp.status_code == 200, resp.text
+        result = single_row(resp.json(), route_type)
+        assert result['id'] == 1 and result['factor'] == 0.5 and result['end_time'] == 0.5
+
+        # `audio` is served as a /media/ URL when uploaded, or (over proxy) when a referenced local file had to
+        # be shipped to the daemon; a locally-referenced external file is left as a file:// URL.
+        if use_uploadfile or catalog_mode == 'proxy':
+            assert '/media/' in result['audio'], result['audio']
+        else:
+            assert result['audio'].startswith('file:'), result['audio']
+        if route_type == 'insert':
+            if catalog_mode == 'local':
+                media_dir = str(Env.get().media_dir)
+                audio_local = t.where(t.id == 1).select(p=t.audio.localpath).collect()[0]['p']
+                if use_uploadfile:
+                    assert audio_local.startswith(media_dir + os.sep), f'audio not under media_dir: {audio_local}'
+                    assert_media_fetchable(client, result['audio'], audio_local)
+                else:
+                    assert not audio_local.startswith(media_dir + os.sep), (
+                        f'external audio moved into media_dir: {audio_local}'
+                    )
+                paths = (
+                    t.where(t.id == 1).select(scaled=t.scaled.localpath, normalized=t.normalized.localpath).collect()[0]
+                )
+                for col in ('scaled', 'normalized'):
+                    assert_media_fetchable(client, result[col], paths[col], label=col)
+            else:
+                # over proxy the media lives on the daemon; verify each output is fetchable through the router
+                for col in ('audio', 'scaled', 'normalized'):
+                    media_resp = get_media(client, result[col])
+                    assert media_resp.status_code == 200, f'{col}: {media_resp.status_code}'
+                    assert len(media_resp.content) > 0, col
+            # verify persisted row
+            row = t.where(t.id == 1).select(t.id, t.factor, t.end_time).collect()[0]
+            assert row == {'id': 1, 'factor': 0.5, 'end_time': 0.5}
+        # semantic check on computed media (runs in both modes); multiply_volume / normalize
+        # preserve duration, so we just verify the bytes decode as valid audio
+        fetch_and_decode_media(client, result['scaled'], assert_audio_bytes)
+        fetch_and_decode_media(client, result['normalized'], assert_audio_bytes)
+
+        # route /scale: FileResponse with volume-scaled audio
+        resp = post('/scale', 2, factor=0.25, end_time=1.0)
+        assert resp.status_code == 200, resp.text
+        assert resp.headers['content-type'].startswith('audio/'), resp.headers['content-type']
+        assert_audio_bytes(resp.content)
+        if route_type == 'insert' and catalog_mode == 'local':
+            scaled_path = t.where(t.id == 2).select(p=t.scaled.localpath).collect()[0]['p']
+            assert_fileresponse_ok(resp, scaled_path, 'audio/')
+
+        # route /normalize: FileResponse with normalized audio.
+        # factor/end_time must be supplied (schema-required) even though normalize doesn't use them.
+        resp = post('/normalize', 3, factor=0.5, end_time=0.5)
+        assert resp.status_code == 200, resp.text
+        assert resp.headers['content-type'].startswith('audio/'), resp.headers['content-type']
+        assert_audio_bytes(resp.content)
+        if route_type == 'insert' and catalog_mode == 'local':
+            normalized_path = t.where(t.id == 3).select(p=t.normalized.localpath).collect()[0]['p']
+            assert_fileresponse_ok(resp, normalized_path, 'audio/')
+
+    @pytest.mark.parametrize('route_type', ['insert', 'compute'])
+    @pytest.mark.parametrize('use_uploadfile', [True, False])
+    def test_add_insert_route_video_bg(
+        self,
+        make_catalog_path: Callable[[str], str],
+        catalog_mode: CatalogMode,
+        use_uploadfile: bool,
+        tmp_path: pathlib.Path,
+        route_type: Literal['insert', 'compute'],
+    ) -> None:
+        """Background variant of test_add_insert_route_video: POST returns a job id/url, the
+        work runs in FastAPIRouter._executor, and the result is fetched via /jobs/{id}."""
+        skip_test_if_not_installed('fastapi')
+        from pixeltable.serving import FastAPIRouter, SqlExport
+
+        p = make_catalog_path
+        video_path = get_video_files()[0]
+        pxt.create_dir(p('test_serve'))
+        t = pxt.create_table(
+            p('test_serve.videos'),
+            {'id': pxt.Int | None, 'video': pxt.Video | None, 'width': pxt.Int | None, 'height': pxt.Int | None},
+        )
+        t.add_computed_column(resized=t.video.resize(width=t.width, height=t.height))
+        t.add_computed_column(thumbnail=t.video.extract_frame(timestamp=0.0))
+        # Delay every insert so the polling loop actually observes a 'pending' response
+        # before 'done' - otherwise fast inserts would transition straight to 'done'
+        # between the POST and the first GET and we wouldn't exercise the polling path.
+        t.add_computed_column(delay=sleep(1.0))
+
+        # sqlite target for the /resize route: confirms background + export_sql works end-to-end
+        # (the SQL write happens in the worker thread after the pxt insert commits).
+        db_connect = make_sqlite_target(tmp_path / 'export.db', 'bg_resize', {'resized': sql.VARCHAR})
+
+        router = FastAPIRouter()
+        add_route_fn = router.add_insert_route if route_type == 'insert' else router.add_compute_route
+        uploadfile_inputs = ['video'] if use_uploadfile else None
+        # /all: defaults for inputs/outputs, all columns in the response
+        add_route_fn(t, path='/all', uploadfile_inputs=uploadfile_inputs, background=True)
+        # /resize: single-output JSON response (no FileResponse - mutually exclusive with background);
+        # also exports to sqlite to cover the background + export_sql combination
+        add_route_fn(
+            t,
+            path='/resize',
+            inputs=['id', 'width'] if use_uploadfile else ['id', 'video', 'width'],
+            uploadfile_inputs=uploadfile_inputs,
+            outputs=['resized'],
+            background=True,
+            export_sql=SqlExport(db_connect=db_connect, table='bg_resize'),
+        )
+        client = make_test_client(router)
+        post = make_media_poster(client, video_path, 'video', 'video/webm', use_uploadfile)
+
+        # unknown job id -> 404 (exercised once; independent of the actual jobs)
+        assert client.get('/jobs/__nonexistent__').status_code == 404
+
+        # /all route (row id 1): multi-column response
+        resp = post('/all', 1, width=320, height=240)
+        assert resp.status_code == 200, resp.text
+        job = resp.json()
+        result = single_row(await_background_job(client, job)['result'], route_type)
+        assert result['id'] == 1 and result['width'] == 320 and result['height'] == 240
+
+        # `video` is served as a /media/ URL when uploaded, or (over proxy) when a referenced local file had to
+        # be shipped to the daemon; a locally-referenced external file is left as a file:// URL.
+        if use_uploadfile or catalog_mode == 'proxy':
+            assert '/media/' in result['video'], result['video']
+        else:
+            assert result['video'].startswith('file:'), result['video']
+        if route_type == 'insert':
+            if catalog_mode == 'local':
+                media_dir = str(Env.get().media_dir)
+                video_local = t.where(t.id == 1).select(p=t.video.localpath).collect()[0]['p']
+                if use_uploadfile:
+                    assert video_local.startswith(media_dir + os.sep), f'video not under media_dir: {video_local}'
+                    assert_media_fetchable(client, result['video'], video_local)
+                else:
+                    assert not video_local.startswith(media_dir + os.sep)
+                paths = (
+                    t.where(t.id == 1).select(resized=t.resized.localpath, thumbnail=t.thumbnail.localpath).collect()[0]
+                )
+                for col in ('resized', 'thumbnail'):
+                    assert_media_fetchable(client, result[col], paths[col], label=col)
+            else:
+                # over proxy the media lives on the daemon; verify each output is fetchable through the router
+                for col in ('video', 'resized', 'thumbnail'):
+                    media_resp = get_media(client, result[col])
+                    assert media_resp.status_code == 200, f'{col}: {media_resp.status_code}'
+                    assert len(media_resp.content) > 0, col
+        # semantic check on computed media (runs in both modes)
+        fetch_and_decode_media(client, result['resized'], assert_video_bytes, width=320, height=240)
+        fetch_and_decode_media(client, result['thumbnail'], assert_image_bytes)
+
+        # /resize route (row id 2): single-output JSON response
+        resp = post('/resize', 2, width=160)
+        assert resp.status_code == 200, resp.text
+        job = resp.json()
+        result = single_row(await_background_job(client, job)['result'], route_type)
+        # single-output response model: only 'resized' is present
+        assert set(result.keys()) == {'resized'}, result
+        if route_type == 'insert' and catalog_mode == 'local':
+            resize_local = t.where(t.id == 2).select(p=t.resized.localpath).collect()[0]['p']
+            assert_media_fetchable(client, result['resized'], resize_local)
+        fetch_and_decode_media(client, result['resized'], assert_video_bytes, width=160)
+        # SQL write happened in the worker thread; the URL string in sqlite matches the response
+        # (export_sql writes the response body, so this assertion holds for both insert and compute)
+        assert_sqlite_row(db_connect, 'bg_resize', {'resized': result['resized']}, {'resized': result['resized']})
+
+    def test_openapi(self, make_catalog_path: Callable[[str], str]) -> None:
+        """Verify the generated OpenAPI schema reflects column comments, column types, and route shapes."""
+        p = make_catalog_path
+        skip_test_if_not_installed('fastapi')
+        from pixeltable.serving import FastAPIRouter
+
+        pxt.create_dir(p('test_serve'))
+        # non-computed columns carry comments via the dict-form ColumnSpec
+        t = pxt.create_table(
+            p('test_serve.openapi'),
+            schema={
+                'id': {'type': pxt.Int | None, 'comment': 'unique row identifier'},
+                'prompt': {'type': pxt.String | None, 'comment': 'input text prompt'},
+                'image': {'type': pxt.Image | None, 'comment': 'source image'},
+            },
+        )
+        # add_computed_column() currently offers no way to set a column comment, so the
+        # computed column goes in uncommented - the openapi test only checks that its
+        # description is absent (i.e. not fabricated).
+        t.add_computed_column(rotated=t.image.rotate(90))
+
+        router = FastAPIRouter()
+        router.add_insert_route(t, path='/json')
+        router.add_insert_route(t, path='/upload', uploadfile_inputs=['image'])
+        router.add_insert_route(t, path='/file', outputs=['rotated'], return_fileresponse=True)
+        router.add_insert_route(t, path='/bg', background=True)
+        client = make_test_client(router)
+
+        spec = client.get('/openapi.json').json()
+        paths = spec['paths']
+        schemas = spec['components']['schemas']
+
+        # routes present
+        # note: Starlette's `:path` converter is normalized away in OpenAPI: the route registered
+        # as /media/{path:path} appears as /media/{path}.
+        for route_path in ('/json', '/upload', '/file', '/bg', '/jobs/{job_id}', '/media/{path}'):
+            assert route_path in paths, f'missing {route_path} from openapi paths: {list(paths)}'
+
+        def deref(schema_or_ref: dict[str, Any]) -> dict[str, Any]:
+            """
+            If schema_or_ref is an OpenAPI $ref into components/schemas, return the referenced schema; otherwise return
+            it unchanged.
+            """
+            if '$ref' in schema_or_ref:
+                name = schema_or_ref['$ref'].rsplit('/', 1)[-1]
+                return schemas[name]
+            return schema_or_ref
+
+        # /json: application/json request body, inputs with comments
+        json_body = paths['/json']['post']['requestBody']['content']['application/json']['schema']
+        json_body = deref(json_body)
+        # all three non-computed columns show up, with their comments as descriptions
+        assert set(json_body['properties'].keys()) == {'id', 'prompt', 'image'}
+        assert json_body['properties']['id']['description'] == 'unique row identifier'
+        assert json_body['properties']['prompt']['description'] == 'input text prompt'
+        assert json_body['properties']['image']['description'] == 'source image'
+
+        # /json: response schema is JsonResponse (name derived from path)
+        json_resp = paths['/json']['post']['responses']['200']['content']['application/json']['schema']
+        json_resp = deref(json_resp)
+        assert set(json_resp['properties'].keys()) == {'id', 'prompt', 'image', 'rotated'}
+        assert json_resp['properties']['id']['description'] == 'unique row identifier'
+        assert json_resp['properties']['prompt']['description'] == 'input text prompt'
+        assert json_resp['properties']['image']['description'] == 'source image'
+        # media output columns: format: uri + contentMediaType
+        for media_col in ('image', 'rotated'):
+            prop = json_resp['properties'][media_col]
+            assert prop.get('format') == 'uri', f'{media_col}: {prop}'
+            assert prop.get('contentMediaType') == 'image/*', f'{media_col}: {prop}'
+
+        # /upload: multipart/form-data request body (File + Form fields)
+        upload_content = paths['/upload']['post']['requestBody']['content']
+        assert 'multipart/form-data' in upload_content, list(upload_content)
+        upload_body = deref(upload_content['multipart/form-data']['schema'])
+        assert set(upload_body['properties'].keys()) == {'id', 'prompt', 'image'}
+        # File field for image (rendered either as format: binary or contentMediaType: octet-stream
+        # depending on pydantic/fastapi version); comment is still propagated.
+        image_field = upload_body['properties']['image']
+        assert image_field.get('type') == 'string'
+        assert (
+            image_field.get('format') == 'binary' or image_field.get('contentMediaType') == 'application/octet-stream'
+        )
+        assert image_field['description'] == 'source image'
+        # Form fields keep their comments
+        assert upload_body['properties']['id']['description'] == 'unique row identifier'
+        assert upload_body['properties']['prompt']['description'] == 'input text prompt'
+
+        # /file: FileResponse route - response_class=FileResponse, no JSON model
+        file_resp = paths['/file']['post']['responses']['200']
+        # FastAPI renders a FileResponse route with no application/json schema on 200
+        assert 'application/json' not in file_resp.get('content', {}), file_resp
+
+        # /bg: background route returns BackgroundJobResponse
+        bg_resp = paths['/bg']['post']['responses']['200']['content']['application/json']['schema']
+        assert bg_resp.get('$ref', '').endswith('/BackgroundJobResponse'), bg_resp
+        assert 'BackgroundJobResponse' in schemas
+        bg_model = schemas['BackgroundJobResponse']
+        assert set(bg_model['properties'].keys()) == {'id', 'job_url'}
+
+        # /jobs/{job_id}: GET returns JobStatusResponse
+        jobs_op = paths['/jobs/{job_id}']['get']
+        jobs_resp = jobs_op['responses']['200']['content']['application/json']['schema']
+        assert jobs_resp.get('$ref', '').endswith('/JobStatusResponse'), jobs_resp
+        assert 'JobStatusResponse' in schemas
+        job_status = schemas['JobStatusResponse']
+        assert set(job_status['properties'].keys()) == {'status', 'error', 'result'}
+        # path parameter is declared
+        p0 = jobs_op['parameters'][0]
+        assert p0['name'] == 'job_id' and p0['in'] == 'path'
+
+        # /media/{path}: path parameter declared
+        media_op = paths['/media/{path}']['get']
+        p0 = media_op['parameters'][0]
+        assert p0['name'] == 'path' and p0['in'] == 'path'
+
+    def test_add_query_route_scalars(self, make_catalog_path: Callable[[str], str]) -> None:
+        """Multi-column scalar query route, plus retrieval_udf flavor and registration errors."""
+        p = make_catalog_path
+        skip_test_if_not_installed('fastapi')
+        from pixeltable.serving import FastAPIRouter
+
+        pxt.create_dir(p('test_serve'))
+        t = pxt.create_table(p('test_serve.docs'), {'id': pxt.Int | None, 'text': pxt.String | None})
+        t.add_computed_column(length=t.text.len())
+        rows = [{'id': i, 'text': 'x' * i} for i in range(1, 6)]
+        t.insert(rows)
+
+        @pxt.query
+        def lookup(min_len: int) -> pxt.Query:
+            return t.where(t.length >= min_len).select(t.id, t.text).order_by(t.id)
+
+        @pxt.query
+        def lookup2(min_len: int, max_len: int) -> pxt.Query:
+            return t.where((t.length >= min_len) & (t.length <= max_len)).select(t.id, t.text).order_by(t.id)
+
+        @pxt.query
+        def lookup_with_default(min_len: int = 3) -> pxt.Query:
+            return t.where(t.length >= min_len).select(t.id, t.text).order_by(t.id)
+
+        router = FastAPIRouter()
+        router.add_query_route(path='/lookup', query=lookup)
+        router.add_query_route(path='/lookup-id-only', query=lookup)
+        # inputs=[...] restricts which parameters the endpoint accepts
+        router.add_query_route(path='/lookup-restricted', query=lookup2, inputs=['min_len'])
+        # query with a parameter default
+        router.add_query_route(path='/lookup-default', query=lookup_with_default)
+        # retrieval_udf variant: all columns from the table are returned, one parameter
+        id_lookup = pxt.retrieval_udf(t, parameters=['id'])
+        router.add_query_route(path='/by-id', query=id_lookup)
+        client = make_test_client(router)
+
+        # /lookup: all rows with length >= 3 -> rows 3,4,5
+        resp = client.post('/lookup', json={'min_len': 3})
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {
+            'rows': [{'id': 3, 'text': 'xxx'}, {'id': 4, 'text': 'xxxx'}, {'id': 5, 'text': 'xxxxx'}]
+        }
+
+        # /lookup-id-only: same query, all columns in the response
+        resp = client.post('/lookup-id-only', json={'min_len': 4})
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {'rows': [{'id': 4, 'text': 'xxxx'}, {'id': 5, 'text': 'xxxxx'}]}
+
+        # retrieval_udf: fetch row by id -> single-row list with all columns
+        resp = client.post('/by-id', json={'id': 2})
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {'rows': [{'id': 2, 'text': 'xx', 'length': 2}]}
+
+        # empty result -> empty list (not an error)
+        resp = client.post('/lookup', json={'min_len': 100})
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {'rows': []}
+
+        # /lookup-restricted: inputs=['min_len'] restricts the endpoint to only accept min_len;
+        # max_len should not appear in the OpenAPI schema
+        openapi = client.get('/openapi.json').json()
+        ref = openapi['paths']['/lookup-restricted']['post']['requestBody']['content']['application/json']['schema'][
+            '$ref'
+        ]
+        schema_name = ref.split('/')[-1]
+        restricted_schema = openapi['components']['schemas'][schema_name]
+        assert 'min_len' in restricted_schema['properties']
+        assert 'max_len' not in restricted_schema['properties']
+
+        # /lookup-default: parameter default propagates to the endpoint
+        # calling without min_len should use the default (3) -> rows 3,4,5
+        resp = client.post('/lookup-default', json={})
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {
+            'rows': [{'id': 3, 'text': 'xxx'}, {'id': 4, 'text': 'xxxx'}, {'id': 5, 'text': 'xxxxx'}]
+        }
+        # calling with an explicit value overrides the default
+        resp = client.post('/lookup-default', json={'min_len': 4})
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {'rows': [{'id': 4, 'text': 'xxxx'}, {'id': 5, 'text': 'xxxxx'}]}
+        # OpenAPI should show the default value and min_len should not be required
+        ref = openapi['paths']['/lookup-default']['post']['requestBody']['content']['application/json']['schema'][
+            '$ref'
+        ]
+        default_schema = openapi['components']['schemas'][ref.split('/')[-1]]
+        assert default_schema['properties']['min_len']['default'] == 3
+        assert 'min_len' not in default_schema.get('required', [])
+
+    def test_add_query_route_single_column(self, make_catalog_path: Callable[[str], str]) -> None:
+        """Single-column queries: return_scalar=False produces dict-per-row in a wrapper,
+        return_scalar=True produces a plain list of scalar values."""
+        p = make_catalog_path
+        skip_test_if_not_installed('fastapi')
+        from pixeltable.serving import FastAPIRouter
+
+        pxt.create_dir(p('test_serve'))
+        t = pxt.create_table(p('test_serve.docs'), {'id': pxt.Int | None, 'text': pxt.String | None})
+        t.insert([{'id': i, 'text': f't{i}'} for i in range(3)])
+
+        @pxt.query
+        def all_texts() -> pxt.Query:
+            return t.select(t.text).order_by(t.id)
+
+        @pxt.query(return_scalar=True)
+        def all_texts_scalar() -> pxt.Query:
+            return t.select(t.text).order_by(t.id)
+
+        router = FastAPIRouter()
+        router.add_query_route(path='/texts', query=all_texts)
+        router.add_query_route(path='/texts-scalar', query=all_texts_scalar)
+        client = make_test_client(router)
+
+        # return_scalar=False (default): dict-per-row wrapped in {'rows': [...]}
+        resp = client.post('/texts', json={})
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {'rows': [{'text': 't0'}, {'text': 't1'}, {'text': 't2'}]}
+
+        # return_scalar=True: plain JSON array of scalar values
+        resp = client.post('/texts-scalar', json={})
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == ['t0', 't1', 't2']
+
+    def test_add_query_route_one_row(self, make_catalog_path: Callable[[str], str]) -> None:
+        """one_row=True returns a flat JSON object (or bare scalar with return_scalar=True).
+        0 rows -> 404; >1 rows -> 409."""
+        p = make_catalog_path
+        skip_test_if_not_installed('fastapi')
+        from pixeltable.serving import FastAPIRouter
+
+        pxt.create_dir(p('test_serve'))
+        t = pxt.create_table(p('test_serve.docs'), {'id': pxt.Int | None, 'text': pxt.String | None})
+        # id=0 appears twice on purpose, to exercise the >1-row branch
+        t.insert([{'id': 0, 'text': 'dup-a'}, {'id': 0, 'text': 'dup-b'}, {'id': 1, 'text': 't1'}])
+
+        @pxt.query
+        def by_id(id: int) -> pxt.Query:
+            return t.where(t.id == id).select(t.id, t.text).order_by(t.text)
+
+        @pxt.query(return_scalar=True)
+        def text_by_id(id: int) -> pxt.Query:
+            return t.where(t.id == id).select(t.text).order_by(t.text)
+
+        router = FastAPIRouter()
+        router.add_query_route(path='/by-id', query=by_id, one_row=True)
+        router.add_query_route(path='/text-by-id', query=text_by_id, one_row=True)
+        client = make_test_client(router)
+
+        # non-scalar one_row: flat JSON object, NOT wrapped in {'rows': [...]}
+        resp = client.post('/by-id', json={'id': 1})
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {'id': 1, 'text': 't1'}
+
+        # scalar one_row: bare value, NOT a list
+        resp = client.post('/text-by-id', json={'id': 1})
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == 't1'
+
+        # 0 rows -> 404
+        resp = client.post('/by-id', json={'id': 999})
+        assert resp.status_code == 404, resp.text
+        resp = client.post('/text-by-id', json={'id': 999})
+        assert resp.status_code == 404, resp.text
+
+        # >1 rows -> 409 with 'expected exactly 1' in the detail
+        resp = client.post('/by-id', json={'id': 0})
+        assert resp.status_code == 409, resp.text
+        assert 'expected exactly 1' in resp.json()['detail']
+        resp = client.post('/text-by-id', json={'id': 0})
+        assert resp.status_code == 409, resp.text
+
+        # OpenAPI: non-scalar one_row advertises the row model, not the wrapper
+        openapi = client.get('/openapi.json').json()
+        by_id_200 = openapi['paths']['/by-id']['post']['responses']['200']['content']['application/json']['schema']
+        # should reference the row-shaped model (has 'id' and 'text' properties), not a wrapper with 'rows'
+        assert '$ref' in by_id_200
+        row_schema = openapi['components']['schemas'][by_id_200['$ref'].split('/')[-1]]
+        assert set(row_schema['properties'].keys()) == {'id', 'text'}
+        # scalar one_row schema has no 'rows' wrapper and is not an array
+        scalar_schema = openapi['paths']['/text-by-id']['post']['responses']['200']['content']['application/json'][
+            'schema'
+        ]
+        assert scalar_schema.get('type') != 'array'
+        assert 'rows' not in str(scalar_schema)
+
+    def test_add_query_route_image(self, make_catalog_path: Callable[[str], str], catalog_mode: CatalogMode) -> None:
+        """Image query route: JSON response, return_fileresponse (happy/404/500), and background."""
+        skip_test_if_not_installed('fastapi')
+        from pixeltable.serving import FastAPIRouter
+
+        p = make_catalog_path
+        image_path = get_image_files()[0]
+        pxt.create_dir(p('test_serve'))
+        t = pxt.create_table(p('test_serve.images'), {'id': pxt.Int | None, 'image': pxt.Image | None})
+        # A computed resize produces derived media stored under media_dir, which the route will
+        # rewrite to /media/ URLs. The raw `image` column stays at its pinned external path.
+        t.add_computed_column(resized=t.image.resize(size=(32, 32)))
+        # Delay every computed-column eval so the background polling loop can observe 'pending'.
+        t.add_computed_column(delay=sleep(1.0))
+        t.insert([{'id': 1, 'image': image_path}, {'id': 2, 'image': image_path}])
+
+        @pxt.query
+        def one_image(img_id: int) -> pxt.Query:
+            return t.where(t.id == img_id).select(t.resized)
+
+        @pxt.query
+        def one_image_delayed(img_id: int) -> pxt.Query:
+            return t.where(t.id == img_id).select(t.resized, delay=sleep(1.0))
+
+        @pxt.query
+        def all_images() -> pxt.Query:
+            return t.select(t.resized).order_by(t.id)
+
+        router = FastAPIRouter()
+        # JSON variant: list of {'image': <media url>}
+        router.add_query_route(path='/all-json', query=all_images)
+        # FileResponse variant: exactly one row
+        router.add_query_route(path='/one-file', query=one_image, return_fileresponse=True)
+        # FileResponse variant with >1 row -> 409
+        router.add_query_route(path='/all-file', query=all_images, return_fileresponse=True)
+        # Background variant
+        router.add_query_route(path='/one-bg', query=one_image_delayed, background=True)
+        client = make_test_client(router)
+
+        # JSON variant: wrapper with rows containing objects with 'resized' fields rewritten as media URLs
+        resp = client.post('/all-json', json={})
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert 'rows' in body
+        assert len(body['rows']) == 2
+        for item in body['rows']:
+            assert '/media/' in item['resized'], item['resized']
+            media_resp = get_media(client, item['resized'])
+            assert media_resp.status_code == 200
+
+        # FileResponse: exactly one matching row -> image bytes
+        resp = client.post('/one-file', json={'img_id': 1})
+        if catalog_mode == 'local':
+            resized_local = t.where(t.id == 1).select(p=t.resized.localpath).collect()[0]['p']
+            assert_fileresponse_ok(resp, resized_local, 'image/')
+        else:
+            assert resp.status_code == 200, resp.text
+            assert resp.headers['content-type'].startswith('image/'), resp.headers['content-type']
+            assert len(resp.content) > 0
+
+        # FileResponse: 0 matching rows -> 404
+        resp = client.post('/one-file', json={'img_id': 999})
+        assert resp.status_code == 404, resp.text
+
+        # FileResponse: >1 row -> 409
+        resp = client.post('/all-file', json={})
+        assert resp.status_code == 409, resp.text
+        assert 'expected exactly 1' in resp.json()['detail']
+
+        # Background variant: poll /jobs/{id} until done
+        resp = client.post('/one-bg', json={'img_id': 1})
+        assert resp.status_code == 200, resp.text
+        job = resp.json()
+        result = await_background_job(client, job)['result']
+        assert isinstance(result, dict) and 'rows' in result
+        assert len(result['rows']) == 1
+        assert '/media/' in result['rows'][0]['resized']
+
+    def test_add_query_route_image_transform(self, make_catalog_path: Callable[[str], str]) -> None:
+        """Inline image transformations (non-ColumnRef expressions) in the SELECT list.
+
+        The query-route rewrite at `_fastapi.py` only targets `ColumnRef` items. When the
+        SELECT list contains a raw image-valued expression (e.g., `t.image.resize([16, 16])`),
+        the expression evaluates to a `PIL.Image.Image` at runtime and `_create_output`
+        flushes it to a temp file so the JSON / FileResponse paths can deliver it. Over a proxy table the
+        transform runs on the daemon and the result is shipped back as bytes (transient media download).
+        """
+        skip_test_if_not_installed('fastapi')
+        from pixeltable.serving import FastAPIRouter
+
+        p = make_catalog_path
+        image_path = get_image_files()[0]
+        pxt.create_dir(p('test_serve'))
+        t = pxt.create_table(p('test_serve.img_xform'), {'id': pxt.Int | None, 'image': pxt.Image | None})
+        t.insert([{'id': 1, 'image': image_path}, {'id': 2, 'image': image_path}])
+
+        @pxt.query
+        def thumb_by_id(img_id: int) -> pxt.Query:
+            return t.where(t.id == img_id).select(thumb=t.image.resize([16, 16]))
+
+        router = FastAPIRouter()
+        router.add_query_route(path='/transform-json', query=thumb_by_id, one_row=True)
+        router.add_query_route(path='/transform-file', query=thumb_by_id, return_fileresponse=True)
+        client = make_test_client(router)
+
+        # JSON: inline transform expression surfaces as a /media/ URL
+        resp = client.post('/transform-json', json={'img_id': 1})
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert 'thumb' in body
+        assert '/media/' in body['thumb'], f'expected /media/ URL, got: {body["thumb"]!r}'
+        media_resp = get_media(client, body['thumb'])
+        assert media_resp.status_code == 200
+        assert len(media_resp.content) > 0
+
+        # FileResponse: image bytes with an image/* content type
+        resp = client.post('/transform-file', json={'img_id': 1})
+        assert resp.status_code == 200, resp.text
+        assert resp.headers['content-type'].startswith('image/')
+        assert len(resp.content) > 0
+
+    def test_add_mirror_route_video(self, make_catalog_path: Callable[[str], str]) -> None:
+        """Round trip over a proxy table: an insert route ingests a local video; a query route returns the
+        persisted, computed `mirrored` video by id. Over proxy this exercises the upload path and the
+        persisted-media download (daemon media URL -> client FileCache)."""
+        skip_test_if_not_installed('fastapi')
+        from pixeltable.serving import FastAPIRouter
+
+        p = make_catalog_path
+        video_path = get_video_files()[0]
+        pxt.create_dir(p('test_serve'))
+        t = pxt.create_table(p('test_serve.mirror'), {'id': pxt.Int | None, 'v': pxt.Video | None})
+        t.add_computed_column(mirrored=t.v.mirror_x())
+
+        @pxt.query
+        def get_mirrored(vid: int) -> pxt.Query:
+            return t.where(t.id == vid).select(mirrored=t.mirrored)
+
+        router = FastAPIRouter()
+        router.add_insert_route(t, path='/ingest', uploadfile_inputs=['v'])
+        router.add_query_route(path='/mirrored', query=get_mirrored, one_row=True)
+        client = make_test_client(router)
+
+        # ingest a local video
+        post = make_media_poster(client, video_path, 'v', 'video/webm', use_uploadfile=True)
+        resp = post('/ingest', 1)
+        assert resp.status_code == 200, resp.text
+
+        # retrieve the persisted, computed mirrored video by id
+        resp = client.post('/mirrored', json={'vid': 1})
+        assert resp.status_code == 200, resp.text
+        url = resp.json()['mirrored']
+        assert '/media/' in url, url
+        media = client.get(url)
+        assert media.status_code == 200
+        assert len(media.content) > 0
+
+    def test_duplicate_routes(self, make_catalog_path: Callable[[str], str]) -> None:
+        """Registering the same (path, method) twice must raise rather than silently shadow."""
+        p = make_catalog_path
+        skip_test_if_not_installed('fastapi')
+        from pixeltable.serving import FastAPIRouter
+
+        pxt.create_dir(p('test_serve'))
+        t = pxt.create_table(p('test_serve.dup'), {'id': pxt.Int, 'val': pxt.Int | None}, primary_key='id')
+
+        @pxt.query
+        def lookup() -> pxt.Query:
+            return t.select(t.id)
+
+        # POST/POST collision across the insert/compute/update entry points (both orderings)
+        router = FastAPIRouter()
+        router.add_insert_route(t, path='/a')
+        with pxt_raises(pxt.ErrorCode.PATH_ALREADY_EXISTS, match="already registered: POST '/a'"):
+            router.add_insert_route(t, path='/a')
+        with pxt_raises(pxt.ErrorCode.PATH_ALREADY_EXISTS, match="already registered: POST '/a'"):
+            router.add_compute_route(t, path='/a')
+        with pxt_raises(pxt.ErrorCode.PATH_ALREADY_EXISTS, match="already registered: POST '/a'"):
+            router.add_update_route(t, path='/a', inputs=['val'])
+
+        router = FastAPIRouter()
+        router.add_compute_route(t, path='/b')
+        with pxt_raises(pxt.ErrorCode.PATH_ALREADY_EXISTS, match="already registered: POST '/b'"):
+            router.add_insert_route(t, path='/b')
+
+        # Same-method collision via add_query_route
+        router = FastAPIRouter()
+        router.add_query_route(path='/q', query=lookup, method='post')
+        with pxt_raises(pxt.ErrorCode.PATH_ALREADY_EXISTS, match="already registered: POST '/q'"):
+            router.add_query_route(path='/q', query=lookup, method='post')
+
+        # Different methods on the same path are allowed
+        router = FastAPIRouter()
+        router.add_insert_route(t, path='/mixed')
+        router.add_query_route(path='/mixed', query=lookup, method='get')
+
+        # Collision with the built-in /media and /jobs routes (registered by FastAPIRouter.__init__)
+        router = FastAPIRouter()
+        with pxt_raises(pxt.ErrorCode.PATH_ALREADY_EXISTS, match=r"already registered: GET '/media/\{path:path\}'"):
+            router.add_query_route(path='/media/{path:path}', query=lookup, method='get')
+        with pxt_raises(pxt.ErrorCode.PATH_ALREADY_EXISTS, match=r"already registered: GET '/jobs/\{job_id\}'"):
+            router.add_query_route(path='/jobs/{job_id}', query=lookup, method='get')
+
+        # Duplicate detection respects the router's prefix (FastAPI stores routes under prefix + path)
+        router = FastAPIRouter(prefix='/v1')
+        router.add_insert_route(t, path='/c')
+        with pxt_raises(pxt.ErrorCode.PATH_ALREADY_EXISTS, match="already registered: POST '/v1/c'"):
+            router.add_insert_route(t, path='/c')
+
+    def test_add_query_route_errors(self, make_catalog_path: Callable[[str], str]) -> None:
+        p = make_catalog_path
+        skip_test_if_not_installed('fastapi')
+        from pixeltable.serving import FastAPIRouter
+
+        pxt.create_dir(p('test_serve'))
+        t = pxt.create_table(
+            p('test_serve.docs'), {'id': pxt.Int | None, 'text': pxt.String | None, 'image': pxt.Image | None}
+        )
+        t.insert([{'id': 1, 'text': 'a'}])
+
+        @pxt.query
+        def lookup(min_id: int) -> pxt.Query:
+            return t.where(t.id >= min_id).select(t.id, t.text)
+
+        @pxt.query
+        def with_default(min_id: int = 0) -> pxt.Query:
+            return t.select(t.id)
+
+        @pxt.query
+        def by_text(needle: str) -> pxt.Query:
+            return t.where(t.text == needle).select(t.image)
+
+        @pxt.query
+        def by_image(img: pxt.Image) -> pxt.Query:
+            return t.where(t.image == img).select(t.id)
+
+        router = FastAPIRouter()
+
+        with pxt_raises(pxt.ErrorCode.TYPE_MISMATCH, match=r'must be a @pxt\.query or retrieval_udf'):
+            router.add_query_route(path='/e', query=add_one)  # regular UDF, not a query
+        with pxt_raises(pxt.ErrorCode.COLUMN_NOT_FOUND, match="unknown input parameter 'doesnotexist'"):
+            router.add_query_route(path='/e', query=lookup, inputs=['doesnotexist'])
+        with pxt_raises(pxt.ErrorCode.COLUMN_NOT_FOUND, match="unknown uploadfile input parameter 'doesnotexist'"):
+            router.add_query_route(path='/e', query=lookup, uploadfile_inputs=['doesnotexist'])
+        with pxt_raises(
+            pxt.ErrorCode.UNSUPPORTED_OPERATION, match="uploadfile input parameter 'min_id' is not a media parameter"
+        ):
+            router.add_query_route(path='/e', query=lookup, uploadfile_inputs=['min_id'])
+        with pxt_raises(
+            pxt.ErrorCode.INVALID_ARGUMENT, match='return_fileresponse and background are mutually exclusive'
+        ):
+            router.add_query_route(path='/e', query=by_text, return_fileresponse=True, background=True)
+        with pxt_raises(pxt.ErrorCode.INVALID_ARGUMENT, match='exactly one media-typed output column'):
+            # by_text returns a single media column; lookup returns (id, text) which is not media-typed
+            router.add_query_route(path='/e', query=lookup, return_fileresponse=True)
+        with pxt_raises(pxt.ErrorCode.INVALID_ARGUMENT, match='GET endpoints cannot have uploadfile_inputs'):
+            router.add_query_route(path='/e', query=by_image, uploadfile_inputs=['img'], method='get')
+
+    def test_unservable_output_cols(self, make_catalog_path: Callable[[str], str]) -> None:
+        """Routes reject Array/Binary output cols at registration; JSON with embedded objects is rejected per row."""
+        p = make_catalog_path
+        skip_test_if_not_installed('fastapi')
+        from pixeltable.serving import FastAPIRouter
+
+        pxt.create_dir(p('test_serve'))
+        t = pxt.create_table(
+            p('test_serve.unservable'),
+            {
+                'id': pxt.Int,
+                'val': pxt.Int | None,
+                'blob': pxt.Binary | None,
+                'arr': pxt.Array[(3,), pxt.Float] | None,
+                'data': pxt.Json | None,
+            },
+            primary_key='id',
+        )
+        t.add_computed_column(j_arr=json_embed_ndarray(t.id))
+        t.add_computed_column(j_img=json_embed_image(t.id))
+        t.add_computed_column(j_bytes=json_embed_bytes(t.id))
+        # baseline row for update-route tests
+        t.insert([{'id': 1, 'val': 10, 'data': {'k': 'v', 'n': 42}}])
+
+        # Schema-level rejection: Array and Binary output columns
+        for route_type in ('insert', 'compute', 'update'):
+            inputs = ['val'] if route_type == 'update' else ['id']
+            router = FastAPIRouter()
+            for col_name in ('arr', 'blob'):
+                with pxt_raises(
+                    pxt.ErrorCode.UNSUPPORTED_OPERATION, match=f"output column '{col_name}'.*not supported"
+                ):
+                    add_dml_route(route_type, router, t, path='/x', inputs=inputs, outputs=[col_name])
+
+        # JSON with plain scalars must work on all three routes
+        for route_type in ('insert', 'compute', 'update'):
+            router = FastAPIRouter()
+            body: dict[str, Any]
+            if route_type == 'update':
+                # baseline row has data={'k': 'v', 'n': 42}; updating val leaves data untouched
+                inputs = ['val']
+                body = {'id': 1, 'val': 99}
+            else:
+                # compute doesn't persist; insert at a fresh id so it doesn't collide with the baseline
+                inputs = ['id', 'data']
+                body = {'id': 100, 'data': {'k': 'v', 'n': 42}}
+            add_dml_route(route_type, router, t, path='/x', inputs=inputs, outputs=['data'])
+            client = make_test_client(router)
+            resp = client.post('/x', json=body)
+            assert resp.status_code == 200, resp.text
+            assert single_row(resp.json(), route_type) == {'data': {'k': 'v', 'n': 42}}
+
+        # Request-time rejection for JSON with embedded objects (3 cols x 3 routes).
+        # compute returns the raw embedded object (typed via type(val).__name__); insert/update
+        # store and reload the column, so the value comes back as the inlined-object-md dict and
+        # the check reports the generic 'embedded array/binary/image' message.
+        embed_cases = [
+            ('j_arr', 'compute', 'embedded ndarray'),
+            ('j_arr', 'insert', 'embedded array/binary/image'),
+            ('j_arr', 'update', 'embedded array/binary/image'),
+            ('j_img', 'compute', 'embedded Image'),
+            ('j_img', 'insert', 'embedded array/binary/image'),
+            ('j_img', 'update', 'embedded array/binary/image'),
+            ('j_bytes', 'compute', 'embedded bytes'),
+            ('j_bytes', 'insert', 'embedded array/binary/image'),
+            ('j_bytes', 'update', 'embedded array/binary/image'),
+        ]
+        for i, (col_name, route_type, expected) in enumerate(embed_cases):
+            router = FastAPIRouter()
+            inputs = ['val'] if route_type == 'update' else ['id', 'val']
+            # update operates on the baseline row; insert needs a fresh id each time; compute doesn't persist
+            id_val = 1 if route_type == 'update' else i + 200
+            add_dml_route(route_type, router, t, path='/x', inputs=inputs, outputs=[col_name])
+            client = make_test_client(router)
+            resp = client.post('/x', json={'id': id_val, 'val': 10})
+            assert resp.status_code == 500, resp.text
+            assert expected in resp.text, resp.text
+
+    def test_decorator_routes_allow_unservable_outputs(self, make_catalog_path: Callable[[str], str]) -> None:
+        """Decorator-form routes let user code handle outputs that add_*_route forms reject."""
+        p = make_catalog_path
+        skip_test_if_not_installed('fastapi')
+        from pixeltable.serving import FastAPIRouter
+
+        pxt.create_dir(p('test_serve'))
+        t = pxt.create_table(p('test_serve.unservable_deco'), {'id': pxt.Int, 'val': pxt.Int | None}, primary_key='id')
+        t.add_computed_column(j_arr=json_embed_ndarray(t.id))
+        t.add_computed_column(j_img=json_embed_image(t.id))
+        t.add_computed_column(j_bytes=json_embed_bytes(t.id))
+        t.insert([{'id': 1, 'val': 10}])
+
+        class _OkResp(pydantic.BaseModel):
+            ok: bool
+
+        for route_type in ('insert', 'compute', 'update'):
+            router = FastAPIRouter()
+            inputs = ['val'] if route_type == 'update' else ['id', 'val']
+            deco = dml_decorator(route_type, router)(t, path='/x', inputs=inputs, outputs=['j_arr', 'j_img', 'j_bytes'])
+
+            @deco
+            def handler(*, j_arr: dict, j_img: dict, j_bytes: dict) -> _OkResp:
+                if route_type == 'compute':
+                    # insert/update don't produce correct json objects for return_rows=True
+                    assert isinstance(j_arr['vec'], np.ndarray) and j_arr['vec'].shape == (3,), j_arr['vec']
+                    assert isinstance(j_img['img'], PIL.Image.Image), type(j_img['img'])
+                    assert j_bytes['blob'] == b'\x00\x01\x02', j_bytes['blob']
+                return _OkResp(ok=True)
+
+            client = make_test_client(router)
+            id_val = 1 if route_type == 'update' else 600
+            resp = client.post('/x', json={'id': id_val, 'val': 10})
+            assert resp.status_code == 200, resp.text
+            assert resp.json() == {'ok': True}, resp.json()
+
+    def test_add_compute_route_view(self, make_catalog_path: Callable[[str], str], tmp_path: pathlib.Path) -> None:
+        """Compute routes against a two-level view hierarchy: filter view -> frame-iterator view.
+
+        A compute route on a view takes base-table rows and returns the view's output rows: an empty
+        array when the filter drops the input row, one row per extracted frame for the iterator view.
+        """
+        skip_test_if_not_installed('fastapi')
+        import pydantic
+
+        from pixeltable.functions.video import frame_iterator
+        from pixeltable.serving import FastAPIRouter, SqlExport
+
+        p = make_catalog_path
+        # a short clip (~3.5s), so fps=1 keeps the fan-out small but still produces multiple frames
+        video_path = next(f for f in get_video_files() if f.endswith('v_shooting_01_01.mpg'))
+        pxt.create_dir(p('test_serve'))
+        t = pxt.create_table(p('test_serve.clips'), {'id': pxt.Int | None, 'video': pxt.Video | None})
+        v = pxt.create_view(p('test_serve.clips_v'), t.where(t.id > 0))
+        vv = pxt.create_view(p('test_serve.clips_vv'), v, iterator=frame_iterator(v.video, fps=1.0))
+        vv.add_computed_column(rotated=vv.frame.rotate(90))
+
+        db_connect = make_sqlite_target(
+            tmp_path / 'export.db', 'frames_out', {'id': sql.Integer, 'pos': sql.Integer, 'rotated': sql.VARCHAR}
+        )
+
+        router = FastAPIRouter()
+        router.add_compute_route(vv, path='/frames')
+        router.add_compute_route(
+            vv,
+            path='/subset',
+            outputs=['id', 'pos', 'rotated'],
+            export_sql=SqlExport(db_connect=db_connect, table='frames_out'),
+        )
+        router.add_compute_route(vv, path='/frames-bg', background=True)
+        router.add_compute_route(vv, path='/frames-upload', uploadfile_inputs=['video'])
+        # fileresponse registers on the iterator view, but multi-frame inputs error at request time
+        router.add_compute_route(vv, path='/multi-file', outputs=['frame'], return_fileresponse=True)
+        # the filter view produces at most one row per input
+        router.add_compute_route(v, path='/single')
+        router.add_compute_route(v, path='/single-file', outputs=['video'], return_fileresponse=True)
+
+        class FrameRow(pydantic.BaseModel):
+            pos: int
+            rotated: str | None
+
+        class FramesSummary(pydantic.BaseModel):
+            n_frames: int
+            positions: list[int]
+
+        # batch-form decorator: called once with all fanned-out rows (or an empty list)
+        @router.compute_route(vv, path='/summarize', outputs=['pos', 'rotated'])
+        def summarize(rows: list[FrameRow]) -> FramesSummary:
+            assert all(r.rotated is not None and '/media/' in r.rotated for r in rows)
+            return FramesSummary(n_frames=len(rows), positions=[r.pos for r in rows])
+
+        class SingleResp(pydantic.BaseModel):
+            key: int
+
+        # per-column decorators require exactly one output row
+        @router.compute_route(v, path='/single-dec', outputs=['id'])
+        def single_dec(*, id: int | None) -> SingleResp:
+            assert id is not None
+            return SingleResp(key=id)
+
+        @router.compute_route(vv, path='/multi-dec', outputs=['id'])
+        def multi_dec(*, id: int | None) -> SingleResp:  # pragma: no cover - fan-out errors before the call
+            return SingleResp(key=id or 0)
+
+        # the batch form (list[M]) requires an iterator in the path; the filter view v has none
+        with pxt_raises(pxt.ErrorCode.UNSUPPORTED_OPERATION, match='iterator'):
+
+            @router.compute_route(v, path='/batch-filter', outputs=['id'])
+            def _batch_on_filter(rows: list[SingleResp]) -> SingleResp:  # pragma: no cover - rejected at registration
+                return rows[0]
+
+        client = make_test_client(router)
+
+        # /frames: one output row per extracted frame, in iteration order
+        resp = client.post('/frames', json={'id': 1, 'video': video_path})
+        assert resp.status_code == 200, resp.text
+        rows = resp.json()
+        assert len(rows) > 1
+        assert all(set(r.keys()) == {'id', 'video', 'pos', 'frame', 'frame_attrs', 'rotated'} for r in rows)
+        assert all(r['id'] == 1 for r in rows)
+        assert [r['pos'] for r in rows] == list(range(len(rows)))
+        # the unstored frame and the computed rotation are served as media URLs
+        fetch_and_decode_media(client, rows[0]['frame'], assert_image_bytes)
+        fetch_and_decode_media(client, rows[0]['rotated'], assert_image_bytes)
+
+        # ground truth: inserting the same row into the base produces the same number of view rows
+        t.insert([{'id': 1, 'video': video_path}])
+        assert vv.where(vv.id == 1).count() == len(rows)
+
+        # an input row that fails the filter produces an empty array
+        resp = client.post('/frames', json={'id': 0, 'video': video_path})
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == []
+
+        # /subset: restricted outputs; every fanned-out row is exported to the sqlite target
+        resp = client.post('/subset', json={'id': 2, 'video': video_path})
+        assert resp.status_code == 200, resp.text
+        sub_rows = resp.json()
+        assert len(sub_rows) == len(rows)
+        assert all(set(r.keys()) == {'id', 'pos', 'rotated'} for r in sub_rows)
+        eng = sql.create_engine(db_connect)
+        try:
+            with eng.connect() as conn:
+                exported = conn.execute(
+                    sql.text('SELECT id, pos, rotated FROM frames_out WHERE id = 2 ORDER BY pos')
+                ).all()
+        finally:
+            eng.dispose()
+        # the exported rows carry the same id/pos/rotated the endpoint returned, rotated being a served media URL
+        assert [tuple(r) for r in exported] == sorted(
+            ((row['id'], row['pos'], row['rotated']) for row in sub_rows), key=lambda t: t[1]
+        )
+        assert all(rotated is not None and '/media/' in rotated for _, _, rotated in exported)
+
+        # /frames-bg: the job result is the array
+        resp = client.post('/frames-bg', json={'id': 3, 'video': video_path})
+        assert resp.status_code == 200, resp.text
+        result = await_background_job(client, resp.json(), require_pending=False)['result']
+        assert isinstance(result, list) and len(result) == len(rows)
+
+        # /frames-upload: the video arrives as multipart form data
+        post = make_media_poster(client, video_path, 'video', 'video/mpeg', use_uploadfile=True)
+        resp = post('/frames-upload', 4)
+        assert resp.status_code == 200, resp.text
+        upload_rows = resp.json()
+        assert len(upload_rows) == len(rows)
+        assert all('/media/' in r['video'] for r in upload_rows)
+
+        # /single: the filter view has no iterator, so the response is a single object for a passing
+        # input, and null when the filter drops the input row
+        resp = client.post('/single', json={'id': 5, 'video': video_path})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()['id'] == 5
+        resp = client.post('/single', json={'id': 0, 'video': video_path})
+        assert resp.status_code == 200, resp.text
+        assert resp.json() is None
+
+        # /single-file: FileResponse works on a single-row view; a filtered input row is a 404
+        resp = client.post('/single-file', json={'id': 6, 'video': video_path})
+        assert_fileresponse_ok(resp, video_path, 'video/')
+        resp = client.post('/single-file', json={'id': 0, 'video': video_path})
+        assert resp.status_code == 404, resp.text
+        assert 'no output row' in resp.json()['detail']
+
+        # /multi-file: FileResponse on the iterator view errors on a multi-frame input
+        resp = client.post('/multi-file', json={'id': 7, 'video': video_path})
+        assert resp.status_code == 500, resp.text
+        assert 'unexpected row count' in resp.json()['detail']
+
+        # /summarize: the batch-form decorator aggregates the fan-out and sees an empty batch for a
+        # filtered input
+        resp = client.post('/summarize', json={'id': 8, 'video': video_path})
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {'n_frames': len(rows), 'positions': list(range(len(rows)))}
+        resp = client.post('/summarize', json={'id': 0, 'video': video_path})
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {'n_frames': 0, 'positions': []}
+
+        # /single-dec: per-column decorator on the filter view; a filtered input row is a 404
+        resp = client.post('/single-dec', json={'id': 9, 'video': video_path})
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {'key': 9}
+        resp = client.post('/single-dec', json={'id': 0, 'video': video_path})
+        assert resp.status_code == 404, resp.text
+
+        # /multi-dec: per-column decorator on the iterator view errors on a multi-frame input
+        resp = client.post('/multi-dec', json={'id': 10, 'video': video_path})
+        assert resp.status_code == 500, resp.text
+        assert 'unexpected row count' in resp.json()['detail']
+
+    @pytest.mark.parametrize('route_type', ['insert', 'compute'])
+    def test_add_insert_route_errors(
+        self, make_catalog_path: Callable[[str], str], tmp_path: pathlib.Path, route_type: Literal['insert', 'compute']
+    ) -> None:
+        p = make_catalog_path
+        skip_test_if_not_installed('fastapi')
+        import sqlalchemy as sql
+
+        from pixeltable.serving import FastAPIRouter, SqlExport
+
+        pxt.create_dir(p('test_serve'))
+        t = pxt.create_table(
+            p('test_serve.errors'),
+            {'id': pxt.Int | None, 'text': pxt.String | None, 'image': pxt.Image | None, 'video': pxt.Video | None},
+        )
+        # a scalar computed column and a media computed column, so we can test the
+        # "computed column cannot be used as input" check on both code paths
+        t.add_computed_column(text_upper=t.text.upper())
+        t.add_computed_column(frame=t.video.extract_frame(timestamp=0.0))
+
+        router = FastAPIRouter()
+        add_route_fn = router.add_insert_route if route_type == 'insert' else router.add_compute_route
+
+        v = pxt.create_view(p('test_serve.errors_view'), t)
+        if route_type == 'insert':
+            with pxt_raises(pxt.ErrorCode.UNSUPPORTED_OPERATION, match='cannot insert into view'):
+                add_route_fn(v, path='/v')
+        else:
+            # views are valid compute targets, but snapshots, views over snapshots, and sample-clause
+            # views are not
+            snap = pxt.create_snapshot(p('test_serve.errors_snap'), t)
+            with pxt_raises(pxt.ErrorCode.UNSUPPORTED_OPERATION, match='cannot compute snapshot'):
+                add_route_fn(snap, path='/v')
+            snap_view = pxt.create_view(p('test_serve.errors_snap_view'), snap)
+            with pxt_raises(pxt.ErrorCode.UNSUPPORTED_OPERATION, match='base hierarchy contains a snapshot'):
+                add_route_fn(snap_view, path='/v')
+            sample_view = pxt.create_view(p('test_serve.errors_sample_view'), t.sample(fraction=0.5, seed=1))
+            with pxt_raises(pxt.ErrorCode.UNSUPPORTED_OPERATION, match='defined with a sample clause'):
+                add_route_fn(sample_view, path='/v')
+            # inputs conform to the base table's schema, so a view-local column is not a valid input
+            note_view = pxt.create_view(
+                p('test_serve.errors_note_view'), t, additional_columns={'note': pxt.String | None}
+            )
+            with pxt_raises(pxt.ErrorCode.COLUMN_NOT_FOUND, match="unknown input column 'note'"):
+                add_route_fn(note_view, path='/v', inputs=['note'])
+        with pxt_raises(pxt.ErrorCode.COLUMN_NOT_FOUND, match="unknown input column 'doesnotexist'"):
+            add_route_fn(t, path='/e', inputs=['doesnotexist'])
+        with pxt_raises(pxt.ErrorCode.COLUMN_NOT_FOUND, match="unknown uploadfile input column 'doesnotexist'"):
+            add_route_fn(t, path='/e', uploadfile_inputs=['doesnotexist'])
+        with pxt_raises(pxt.ErrorCode.INVALID_ARGUMENT, match="'text_upper' is a computed column"):
+            add_route_fn(t, path='/e', inputs=['text_upper'])
+        with pxt_raises(
+            pxt.ErrorCode.UNSUPPORTED_OPERATION, match="uploadfile input column 'text' is not a media column"
+        ):
+            add_route_fn(t, path='/e', uploadfile_inputs=['text'])
+        with pxt_raises(pxt.ErrorCode.INVALID_ARGUMENT, match="'frame' is a computed column"):
+            add_route_fn(t, path='/e', uploadfile_inputs=['frame'])
+        with pxt_raises(
+            pxt.ErrorCode.INVALID_ARGUMENT, match="'image' appears in both `inputs` and `uploadfile_inputs`"
+        ):
+            add_route_fn(t, path='/e', inputs=['image'], uploadfile_inputs=['image'])
+        with pxt_raises(pxt.ErrorCode.COLUMN_NOT_FOUND, match="unknown output column 'doesnotexist'"):
+            add_route_fn(t, path='/e', outputs=['doesnotexist'])
+        with pxt_raises(
+            pxt.ErrorCode.INVALID_ARGUMENT, match='return_fileresponse and background are mutually exclusive'
+        ):
+            add_route_fn(t, path='/e', outputs=['frame'], return_fileresponse=True, background=True)
+        with pxt_raises(pxt.ErrorCode.INVALID_ARGUMENT, match='exactly one media-typed output column'):
+            add_route_fn(t, path='/e', outputs=['id', 'frame'], return_fileresponse=True)
+        with pxt_raises(pxt.ErrorCode.INVALID_ARGUMENT, match='exactly one media-typed output column'):
+            add_route_fn(t, path='/e', outputs=['text_upper'], return_fileresponse=True)
+
+        # export_sql validation
+        db_connect = f'sqlite:///{tmp_path / "export.db"}'
+
+        with pxt_raises(pxt.ErrorCode.UNSUPPORTED_OPERATION, match="'merge' is not yet supported"):
+            add_route_fn(
+                t, path='/e', outputs=['id'], export_sql=SqlExport(db_connect=db_connect, table='out', method='merge')
+            )
+
+        spec_insert = SqlExport(db_connect=db_connect, table='out')
+        with pxt_raises(
+            pxt.ErrorCode.INVALID_ARGUMENT, match='export_sql and return_fileresponse are mutually exclusive'
+        ):
+            add_route_fn(t, path='/e', outputs=['frame'], return_fileresponse=True, export_sql=spec_insert)
+        with pxt_raises(pxt.ErrorCode.PATH_NOT_FOUND, match="table 'out' does not exist"):
+            add_route_fn(t, path='/e', outputs=['id'], export_sql=spec_insert)
+
+        # pre-create incompatible target tables for the remaining cases
+        eng = sql.create_engine(db_connect)
+        sql.Table('out_bad', sql.MetaData(), sql.Column('id', sql.Date())).create(eng)
+        sql.Table('out_missing', sql.MetaData(), sql.Column('other', sql.Integer())).create(eng)
+        eng.dispose()
+
+        with pxt_raises(pxt.ErrorCode.TYPE_MISMATCH, match="column 'id'"):
+            add_route_fn(t, path='/e', outputs=['id'], export_sql=SqlExport(db_connect=db_connect, table='out_bad'))
+
+        with pxt_raises(pxt.ErrorCode.COLUMN_NOT_FOUND, match="column 'id' not in table"):
+            add_route_fn(t, path='/e', outputs=['id'], export_sql=SqlExport(db_connect=db_connect, table='out_missing'))
+
+        # method='update' validation: target needs a PK
+        make_sqlite_target(tmp_path / 'export.db', 'no_pk', {'id': sql.Integer, 'text_upper': sql.VARCHAR})
+        with pxt_raises(pxt.ErrorCode.INVALID_ARGUMENT, match='has no primary key'):
+            add_route_fn(
+                t,
+                path='/e',
+                outputs=['id', 'text_upper'],
+                export_sql=SqlExport(db_connect=db_connect, table='no_pk', method='update'),
+            )
+
+        # method='update' validation: response columns must include the PK
+        make_sqlite_target(
+            tmp_path / 'export.db', 'with_pk', {'id': sql.Integer, 'text_upper': sql.VARCHAR}, pk_cols=['id']
+        )
+        with pxt_raises(pxt.ErrorCode.MISSING_REQUIRED, match=r"missing: \['id'\]"):
+            add_route_fn(
+                t,
+                path='/e',
+                outputs=['text_upper'],
+                export_sql=SqlExport(db_connect=db_connect, table='with_pk', method='update'),
+            )
+
+        # method='update' validation: at least one non-PK column must be present
+        with pxt_raises(pxt.ErrorCode.INVALID_ARGUMENT, match='at least one non-primary-key column'):
+            add_route_fn(
+                t,
+                path='/e',
+                outputs=['id'],
+                export_sql=SqlExport(db_connect=db_connect, table='with_pk', method='update'),
+            )
+
+    @pytest.mark.parametrize('route_type', ['insert', 'compute'])
+    def test_insert_route(
+        self, make_catalog_path: Callable[[str], str], tmp_path: pathlib.Path, route_type: Literal['insert', 'compute']
+    ) -> None:
+        """`insert_route()`/`compute_route()` as a decorator: user fn consumes outputs and shapes the response."""
+        p = make_catalog_path
+        skip_test_if_not_installed('fastapi')
+        import pydantic
+
+        from pixeltable.serving import FastAPIRouter, SqlExport
+
+        pxt.create_dir(p('test_serve'))
+        t = pxt.create_table(p('test_serve.decorated'), {'id': pxt.Int | None, 'prompt': pxt.String | None})
+        t.add_computed_column(greeting='hello, ' + t.prompt)
+        t.add_computed_column(length=t.prompt.len())
+
+        # sqlite target whose columns match the user pydantic response model fields
+        db_connect = make_sqlite_target(tmp_path / 'export.db', 'gen_out', {'tag': sql.VARCHAR, 'size': sql.Integer})
+
+        router = FastAPIRouter()
+
+        class GenResponse(pydantic.BaseModel):
+            tag: str
+            size: int
+
+        @dml_decorator(route_type, router)(
+            t,
+            path='/generate',
+            inputs=['id', 'prompt'],
+            outputs=['greeting', 'length'],
+            export_sql=SqlExport(db_connect=db_connect, table='gen_out'),
+        )
+        def format_response(*, greeting: str | None, length: int | None) -> GenResponse:
+            assert greeting is not None and length is not None
+            return GenResponse(tag=greeting.upper(), size=length * 2)
+
+        client = make_test_client(router)
+
+        # foreground; the decorated fn shapes the response in both route types
+        resp = client.post('/generate', json={'id': 1, 'prompt': 'world'})
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {'tag': 'HELLO, WORLD', 'size': 10}
+        assert t.where(t.id == 1).count() == (1 if route_type == 'insert' else 0)
+        # the decorator's response model fields landed in sqlite
+        assert_sqlite_row(db_connect, 'gen_out', {'tag': 'HELLO, WORLD'}, {'tag': 'HELLO, WORLD', 'size': 10})
+
+        # decorator should return the function unchanged (callable for unit tests)
+        direct = format_response(greeting='hi', length=2)
+        assert isinstance(direct, GenResponse) and direct.tag == 'HI' and direct.size == 4
+
+    @pytest.mark.parametrize('route_type', ['insert', 'compute'])
+    def test_insert_route_type_validation(
+        self, make_catalog_path: Callable[[str], str], tmp_path: pathlib.Path, route_type: Literal['insert', 'compute']
+    ) -> None:
+        """Parameter annotations are validated against the column types (strict nullability)."""
+        p = make_catalog_path
+        skip_test_if_not_installed('fastapi')
+        import pydantic
+
+        from pixeltable.serving import FastAPIRouter, SqlExport
+
+        pxt.create_dir(p('test_serve'))
+        t = pxt.create_table(p('test_serve.types'), {'id': pxt.Int, 'prompt': pxt.String | None})
+        t.add_computed_column(length=t.prompt.len())
+        router = FastAPIRouter()
+        route = dml_decorator(route_type, router)
+
+        class R(pydantic.BaseModel):
+            x: int
+
+        # missing annotation
+        with pxt_raises(pxt.ErrorCode.INVALID_ARGUMENT, match='has no type annotation'):
+
+            @route(t, path='/e1', outputs=['id'])
+            def _(*, id) -> R:  # type: ignore[no-untyped-def]
+                return R(x=id)
+
+        # wrong scalar type
+        with pxt_raises(pxt.ErrorCode.TYPE_MISMATCH, match='parameter .id. has annotation'):
+
+            @route(t, path='/e2', outputs=['id'])
+            def _(*, id: str) -> R:
+                return R(x=0)
+
+        # non-nullable annotation for nullable column (length is Optional[int] from String.len())
+        with pxt_raises(pxt.ErrorCode.TYPE_MISMATCH, match='parameter .length. has annotation'):
+
+            @route(t, path='/e3', outputs=['length'])
+            def _(*, length: int) -> R:
+                return R(x=length)
+
+        # annotation that ColumnType.from_python_type() cannot interpret
+        with pxt_raises(pxt.ErrorCode.INVALID_TYPE, match='cannot interpret annotation'):
+
+            @route(t, path='/e4', outputs=['id'])
+            def _(*, id: complex) -> R:
+                return R(x=0)
+
+        # `T | None` for non-nullable column is accepted (user annotates looser)
+        @route(t, path='/ok1', outputs=['id'])
+        def _ok1(*, id: int | None) -> R:
+            return R(x=id or 0)
+
+        # `T | None` for nullable column is accepted
+        @route(t, path='/ok2', outputs=['length'])
+        def _ok2(*, length: int | None) -> R:
+            return R(x=length or 0)
+
+        # export_sql + response model field with an annotation from_python_type can't interpret
+        class CustomClass:
+            pass
+
+        class BadResponse(pydantic.BaseModel):
+            model_config = pydantic.ConfigDict(arbitrary_types_allowed=True)
+            x: int
+            weird: CustomClass | None = None
+
+        db_connect = make_sqlite_target(tmp_path / 'export.db', 'bad', {'x': sql.Integer, 'weird': sql.VARCHAR})
+        with pxt_raises(pxt.ErrorCode.INVALID_TYPE, match="cannot interpret response field 'weird'"):
+
+            @route(t, path='/e_export', outputs=['id'], export_sql=SqlExport(db_connect=db_connect, table='bad'))
+            def _bad(*, id: int) -> BadResponse:
+                return BadResponse(x=id)
+
+    def test_update_route_type_validation(
+        self, make_catalog_path: Callable[[str], str], tmp_path: pathlib.Path
+    ) -> None:
+        """Update-route parameter annotations are validated against column types (strict nullability)."""
+        p = make_catalog_path
+        skip_test_if_not_installed('fastapi')
+        import pydantic
+
+        from pixeltable.serving import FastAPIRouter, SqlExport
+
+        pxt.create_dir(p('test_serve'))
+        t = pxt.create_table(p('test_serve.types'), {'id': pxt.Int, 'prompt': pxt.String | None}, primary_key='id')
+        t.add_computed_column(length=t.prompt.len())
+        router = FastAPIRouter()
+
+        class R(pydantic.BaseModel):
+            x: int
+
+        # missing annotation
+        with pxt_raises(pxt.ErrorCode.INVALID_ARGUMENT, match='update_route.*has no type annotation'):
+
+            @router.update_route(t, path='/e1', outputs=['id'])
+            def _(*, id) -> R:  # type: ignore[no-untyped-def]
+                return R(x=id)
+
+        # wrong scalar type
+        with pxt_raises(pxt.ErrorCode.TYPE_MISMATCH, match='update_route.*parameter .id. has annotation'):
+
+            @router.update_route(t, path='/e2', outputs=['id'])
+            def _(*, id: str) -> R:
+                return R(x=0)
+
+        # non-nullable annotation for nullable column
+        with pxt_raises(pxt.ErrorCode.TYPE_MISMATCH, match='update_route.*parameter .length. has annotation'):
+
+            @router.update_route(t, path='/e3', outputs=['length'])
+            def _(*, length: int) -> R:
+                return R(x=length)
+
+        # unmappable annotation
+        with pxt_raises(pxt.ErrorCode.INVALID_TYPE, match='update_route.*cannot interpret annotation'):
+
+            @router.update_route(t, path='/e4', outputs=['id'])
+            def _(*, id: complex) -> R:
+                return R(x=0)
+
+        # `T | None` is accepted for both nullable and non-nullable columns
+        @router.update_route(t, path='/ok1', outputs=['id'])
+        def _ok1(*, id: int | None) -> R:
+            return R(x=id or 0)
+
+        @router.update_route(t, path='/ok2', outputs=['length'])
+        def _ok2(*, length: int | None) -> R:
+            return R(x=length or 0)
+
+        # export_sql + response model field with an annotation from_python_type can't interpret
+        class CustomThing:
+            pass
+
+        class BadResponse(pydantic.BaseModel):
+            model_config = pydantic.ConfigDict(arbitrary_types_allowed=True)
+            x: int
+            weird: CustomThing | None = None
+
+        db_connect = make_sqlite_target(tmp_path / 'export.db', 'bad', {'x': sql.Integer, 'weird': sql.VARCHAR})
+        with pxt_raises(pxt.ErrorCode.INVALID_TYPE, match="cannot interpret response field 'weird'"):
+
+            @router.update_route(
+                t, path='/e_export', outputs=['id'], export_sql=SqlExport(db_connect=db_connect, table='bad')
+            )
+            def _bad(*, id: int) -> BadResponse:
+                return BadResponse(x=id)
+
+    def test_route_decorators_future_annotations(self, make_catalog_path: Callable[[str], str]) -> None:
+        """Decorated function defined in a module with `from __future__ import annotations`.
+
+        Under PEP 563, parameter and return annotations are strings at runtime; the validator
+        must resolve them via typing.get_type_hints() before interpreting them.
+        """
+        p = make_catalog_path
+        skip_test_if_not_installed('fastapi')
+        import sys
+        import textwrap
+        import types
+
+        from pixeltable.serving import FastAPIRouter
+
+        pxt.create_dir(p('test_serve'))
+        t = pxt.create_table(p('test_serve.future'), {'id': pxt.Int, 'text': pxt.String}, primary_key='id')
+        t.add_computed_column(text_upper=t.text.upper())
+        t.insert([{'id': 1, 'text': 'hello'}])
+
+        user_mod = types.ModuleType('_test_future_ann_mod')
+        # exec in a module whose source explicitly enables PEP 563 so annotations stay as strings
+        exec(
+            textwrap.dedent("""
+                from __future__ import annotations
+
+                import pydantic
+
+                class InsResp(pydantic.BaseModel):
+                    tag: str
+
+                class UpdResp(pydantic.BaseModel):
+                    key: int
+                    tag: str
+
+                class BatchRow(pydantic.BaseModel):
+                    text_upper: str
+
+                class BatchResp(pydantic.BaseModel):
+                    tags: list[str]
+
+                def fmt_insert(*, text_upper: str) -> InsResp:
+                    return InsResp(tag=text_upper)
+
+                def fmt_update(*, id: int, text_upper: str) -> UpdResp:
+                    return UpdResp(key=id, tag=text_upper)
+
+                def fmt_batch(rows: list[BatchRow]) -> BatchResp:
+                    return BatchResp(tags=[r.text_upper for r in rows])
+            """),
+            user_mod.__dict__,
+        )
+        sys.modules['_test_future_ann_mod'] = user_mod
+
+        try:
+            router = FastAPIRouter()
+            router.insert_route(t, path='/ins', outputs=['text_upper'])(user_mod.fmt_insert)
+            router.update_route(t, path='/upd', inputs=['text'], outputs=['id', 'text_upper'])(user_mod.fmt_update)
+            # per-column and batch compute forms; batch detection must resolve the string 'list[BatchRow]'
+            router.compute_route(t, path='/cmp', outputs=['text_upper'])(user_mod.fmt_insert)
+            # batch is rejected on a base table (no iterator); reaching that error means the string
+            # 'list[BatchRow]' resolved to a batch form under PEP 563
+            with pxt_raises(pxt.ErrorCode.UNSUPPORTED_OPERATION, match='iterator'):
+                router.compute_route(t, path='/cmp-batch', outputs=['text_upper'])(user_mod.fmt_batch)
+            client = make_test_client(router)
+
+            resp = client.post('/ins', json={'id': 2, 'text': 'world'})
+            assert resp.status_code == 200, resp.text
+            assert resp.json() == {'tag': 'WORLD'}
+
+            resp = client.post('/upd', json={'id': 1, 'text': 'updated'})
+            assert resp.status_code == 200, resp.text
+            assert resp.json() == {'key': 1, 'tag': 'UPDATED'}
+
+            resp = client.post('/cmp', json={'id': 3, 'text': 'abc'})
+            assert resp.status_code == 200, resp.text
+            assert resp.json() == {'tag': 'ABC'}
+        finally:
+            del sys.modules['_test_future_ann_mod']
+
+    def test_route_decorators_unresolvable_annotation(self, make_catalog_path: Callable[[str], str]) -> None:
+        """Forward-ref that can't be resolved produces a clean INVALID_ARGUMENT error at registration."""
+        p = make_catalog_path
+        skip_test_if_not_installed('fastapi')
+        import sys
+        import textwrap
+        import types
+
+        from pixeltable.serving import FastAPIRouter
+
+        pxt.create_dir(p('test_serve'))
+        t = pxt.create_table(p('test_serve.unresolvable'), {'id': pxt.Int, 'text': pxt.String}, primary_key='id')
+
+        user_mod = types.ModuleType('_test_unresolvable_ann_mod')
+        exec(
+            textwrap.dedent("""
+                from __future__ import annotations
+
+                import pydantic
+
+                class R(pydantic.BaseModel):
+                    x: int
+
+                def fmt(*, id: DoesNotExist) -> R:  # noqa: F821 - intentionally unresolvable
+                    return R(x=id)
+            """),
+            user_mod.__dict__,
+        )
+        sys.modules['_test_unresolvable_ann_mod'] = user_mod
+
+        try:
+            router = FastAPIRouter()
+            with pxt_raises(pxt.ErrorCode.INVALID_ARGUMENT, match='cannot resolve type annotations'):
+                router.insert_route(t, path='/e', outputs=['id'])(user_mod.fmt)
+            # the compute form resolves annotations during batch-shape detection
+            with pxt_raises(pxt.ErrorCode.INVALID_ARGUMENT, match='cannot resolve type annotations'):
+                router.compute_route(t, path='/e', outputs=['id'])(user_mod.fmt)
+        finally:
+            del sys.modules['_test_unresolvable_ann_mod']
+
+    @pytest.mark.parametrize('route_type', ['insert', 'compute'])
+    def test_insert_route_image(
+        self, make_catalog_path: Callable[[str], str], route_type: Literal['insert', 'compute']
+    ) -> None:
+        """Media columns surface as /media/ URLs in the decorated fn's kwargs."""
+        p = make_catalog_path
+        skip_test_if_not_installed('fastapi')
+        import pydantic
+
+        from pixeltable.serving import FastAPIRouter
+
+        pxt.create_dir(p('test_serve'))
+        t = pxt.create_table(p('test_serve.img_dec'), {'id': pxt.Int | None, 'image': pxt.Image | None})
+        t.add_computed_column(thumb=t.image.resize([32, 32]))
+
+        router = FastAPIRouter()
+
+        class ImgResp(pydantic.BaseModel):
+            thumb_url: str
+            is_media_url: bool
+
+        @dml_decorator(route_type, router)(t, path='/img', inputs=['id', 'image'], outputs=['thumb'])
+        def make_resp(*, thumb: str | None) -> ImgResp:
+            assert thumb is not None
+            return ImgResp(thumb_url=thumb, is_media_url='/media/' in thumb)
+
+        client = make_test_client(router)
+
+        image_path = get_image_files()[0]
+        resp = client.post('/img', json={'id': 1, 'image': image_path})
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body['is_media_url'] is True
+        assert '/media/' in body['thumb_url']
+
+    @pytest.mark.parametrize('route_type', ['insert', 'compute'])
+    @pytest.mark.parametrize('use_uploadfile', [True, False])
+    def test_insert_route_uploadfile(
+        self, make_catalog_path: Callable[[str], str], use_uploadfile: bool, route_type: Literal['insert', 'compute']
+    ) -> None:
+        """Decorator + multipart/form-data upload."""
+        p = make_catalog_path
+        skip_test_if_not_installed('fastapi')
+        import pydantic
+
+        from pixeltable.serving import FastAPIRouter
+
+        pxt.create_dir(p('test_serve'))
+        t = pxt.create_table(p('test_serve.upl_dec'), {'id': pxt.Int | None, 'image': pxt.Image | None})
+        t.add_computed_column(thumb=t.image.resize([16, 16]))
+
+        router = FastAPIRouter()
+
+        class UplResp(pydantic.BaseModel):
+            thumb_url: str
+
+        uploadfile_inputs = ['image'] if use_uploadfile else None
+        inputs = ['id'] if use_uploadfile else ['id', 'image']
+
+        @dml_decorator(route_type, router)(
+            t, path='/upl', inputs=inputs, uploadfile_inputs=uploadfile_inputs, outputs=['thumb']
+        )
+        def make_resp(*, thumb: str | None) -> UplResp:
+            assert thumb is not None
+            return UplResp(thumb_url=thumb)
+
+        client = make_test_client(router)
+
+        image_path = get_image_files()[0]
+        if use_uploadfile:
+            with open(image_path, 'rb') as f:
+                resp = client.post(
+                    '/upl', files={'image': (os.path.basename(image_path), f.read(), 'image/jpeg')}, data={'id': '1'}
+                )
+        else:
+            resp = client.post('/upl', json={'id': 1, 'image': image_path})
+        assert resp.status_code == 200, resp.text
+        assert '/media/' in resp.json()['thumb_url']
+
+    @pytest.mark.parametrize('route_type', ['insert', 'compute'])
+    def test_insert_route_background(
+        self, make_catalog_path: Callable[[str], str], route_type: Literal['insert', 'compute']
+    ) -> None:
+        """Background variant: 202-like response with job_url; poll for the decorated fn's result."""
+        p = make_catalog_path
+        skip_test_if_not_installed('fastapi')
+        import pydantic
+
+        from pixeltable.serving import FastAPIRouter
+
+        pxt.create_dir(p('test_serve'))
+        t = pxt.create_table(
+            p('test_serve.bg_dec'), {'id': pxt.Int | None, 'delay': pxt.Float | None, 'value': pxt.Int | None}
+        )
+        t.add_computed_column(slept=sleep(t.delay))
+
+        router = FastAPIRouter()
+
+        class BgResp(pydantic.BaseModel):
+            doubled: int
+
+        @dml_decorator(route_type, router)(t, path='/bg', outputs=['value'], background=True)
+        def make_resp(*, value: int | None) -> BgResp:
+            assert value is not None
+            return BgResp(doubled=value * 2)
+
+        client = make_test_client(router)
+
+        resp = client.post('/bg', json={'id': 1, 'delay': 0.05, 'value': 7})
+        assert resp.status_code == 200, resp.text
+        job = resp.json()
+        result = await_background_job(client, job, require_pending=False)['result']
+        assert result == {'doubled': 14}
+
+    @pytest.mark.parametrize('route_type', ['insert', 'compute'])
+    def test_insert_route_errors(
+        self, make_catalog_path: Callable[[str], str], route_type: Literal['insert', 'compute']
+    ) -> None:
+        p = make_catalog_path
+        skip_test_if_not_installed('fastapi')
+        import pydantic
+
+        from pixeltable.serving import FastAPIRouter
+
+        pxt.create_dir(p('test_serve'))
+        t = pxt.create_table(p('test_serve.dec_err'), {'id': pxt.Int, 'text': pxt.String})
+        t.add_computed_column(text_upper=t.text.upper())
+        router = FastAPIRouter()
+        route = dml_decorator(route_type, router)
+
+        # upstream validation errors (shared with add_insert_route) still fire:
+        with pxt_raises(pxt.ErrorCode.COLUMN_NOT_FOUND, match="unknown output column 'doesnotexist'"):
+
+            @route(t, path='/e', outputs=['doesnotexist'])
+            def _(*, doesnotexist: str) -> pydantic.BaseModel:  # pragma: no cover - never reached
+                raise AssertionError
+
+        # fn-shape errors:
+        class Resp(pydantic.BaseModel):
+            x: int
+
+        with pxt_raises(pxt.ErrorCode.UNSUPPORTED_OPERATION, match='must be keyword-only'):
+
+            @route(t, path='/e1', outputs=['id'])
+            def _(id: int) -> Resp:  # positional-or-keyword is rejected
+                return Resp(x=id)
+
+        with pxt_raises(pxt.ErrorCode.UNSUPPORTED_OPERATION, match="'doesnotexist' is not in the declared outputs"):
+
+            @route(t, path='/e2', outputs=['id'])
+            def _(*, doesnotexist: int) -> Resp:
+                return Resp(x=doesnotexist)
+
+        with pxt_raises(pxt.ErrorCode.MISSING_REQUIRED, match='missing parameters for outputs'):
+
+            @route(t, path='/e3', outputs=['id', 'text'])
+            def _(*, id: int) -> Resp:
+                return Resp(x=id)
+
+        with pxt_raises(pxt.ErrorCode.INVALID_ARGUMENT, match=r'pydantic\.BaseModel subclass'):
+
+            @route(t, path='/e4', outputs=['id'])
+            def _(*, id: int):  # type: ignore[no-untyped-def]  # intentionally missing return annotation
+                return {'x': id}
+
+    def test_compute_route_batch(self, make_catalog_path: Callable[[str], str]) -> None:
+        """compute_route() batch form on an iterator view: the fn takes list[RowModel] of all fanned-out rows."""
+        p = make_catalog_path
+        skip_test_if_not_installed('fastapi')
+        import pydantic
+
+        from pixeltable.functions.video import frame_iterator
+        from pixeltable.serving import FastAPIRouter
+
+        video_path = next(f for f in get_video_files() if f.endswith('v_shooting_01_01.mpg'))
+        pxt.create_dir(p('test_serve'))
+        t = pxt.create_table(
+            p('test_serve.batch_dec'), {'id': pxt.Int | None, 'prompt': pxt.String | None, 'video': pxt.Video | None}
+        )
+        vv = pxt.create_view(p('test_serve.batch_dec_frames'), t, iterator=frame_iterator(t.video, fps=1.0))
+        vv.add_computed_column(greeting='hello, ' + vv.prompt)
+        vv.add_computed_column(thumb=vv.frame.resize([16, 16]))
+
+        router = FastAPIRouter()
+
+        class RowM(pydantic.BaseModel):
+            greeting: str | None
+            thumb: str | None
+
+        class BatchResp(pydantic.BaseModel):
+            n: int
+            greetings: list[str]
+            thumbs_are_media_urls: bool
+
+        @router.compute_route(vv, path='/batch', outputs=['greeting', 'thumb'])
+        def handle(rows: list[RowM]) -> BatchResp:
+            return BatchResp(
+                n=len(rows),
+                greetings=[r.greeting or '' for r in rows],
+                thumbs_are_media_urls=all(r.thumb is not None and '/media/' in r.thumb for r in rows),
+            )
+
+        class KwRow(pydantic.BaseModel):
+            greeting: str | None
+
+        class KwResp(pydantic.BaseModel):
+            first: str
+
+        # a keyword-only batch parameter is accepted as well
+        @router.compute_route(vv, path='/batch-kw', outputs=['greeting'])
+        def handle_kw(*, rows: list[KwRow]) -> KwResp:
+            return KwResp(first=rows[0].greeting or '')
+
+        client = make_test_client(router)
+
+        # the iterator view fans a base-table row out to several frame rows; the batch fn receives them all
+        resp = client.post('/batch', json={'id': 1, 'prompt': 'world', 'video': video_path})
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body['n'] > 1
+        assert body['greetings'] == ['hello, world'] * body['n']
+        assert body['thumbs_are_media_urls'] is True
+        assert t.count() == 0  # compute doesn't persist into the base table
+
+        resp = client.post('/batch-kw', json={'id': 2, 'prompt': 'abc', 'video': video_path})
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {'first': 'hello, abc'}
+
+        # the decorator returns the function unchanged
+        direct = handle([RowM(greeting='hi', thumb=None)])
+        assert isinstance(direct, BatchResp) and direct.n == 1
+
+        # the batch form requires an iterator in the path; on a base table it is rejected at registration
+        class TableRow(pydantic.BaseModel):
+            prompt: str | None
+
+        with pxt_raises(pxt.ErrorCode.UNSUPPORTED_OPERATION, match='iterator'):
+
+            @router.compute_route(t, path='/batch-table', outputs=['prompt'])
+            def _(rows: list[TableRow]) -> KwResp:  # pragma: no cover - rejected at registration
+                raise AssertionError
+
+        # batch-form registration errors:
+        class Resp(pydantic.BaseModel):
+            x: int
+
+        # list of a non-model type is not batch-shaped; the fn falls through to per-column validation
+        with pxt_raises(pxt.ErrorCode.UNSUPPORTED_OPERATION, match='must be keyword-only'):
+
+            @router.compute_route(vv, path='/e1', outputs=['greeting'])
+            def _(rows: list[str]) -> Resp:  # pragma: no cover - never registered
+                raise AssertionError
+
+        # row model field that isn't a declared output
+        class ExtraFieldRow(pydantic.BaseModel):
+            greeting: str | None
+            doesnotexist: int
+
+        with pxt_raises(pxt.ErrorCode.UNSUPPORTED_OPERATION, match="row model field 'doesnotexist' is not in"):
+
+            @router.compute_route(vv, path='/e2', outputs=['greeting'])
+            def _(rows: list[ExtraFieldRow]) -> Resp:  # pragma: no cover
+                raise AssertionError
+
+        # row model missing a declared output
+        with pxt_raises(pxt.ErrorCode.MISSING_REQUIRED, match='row model is missing fields for outputs'):
+
+            @router.compute_route(vv, path='/e3', outputs=['greeting', 'thumb'])
+            def _(rows: list[KwRow]) -> Resp:  # pragma: no cover
+                raise AssertionError
+
+        # row model field type incompatible with the column type
+        class WrongTypeRow(pydantic.BaseModel):
+            greeting: int
+
+        with pxt_raises(pxt.ErrorCode.TYPE_MISMATCH, match="row model field 'greeting' has annotation"):
+
+            @router.compute_route(vv, path='/e4', outputs=['greeting'])
+            def _(rows: list[WrongTypeRow]) -> Resp:  # pragma: no cover
+                raise AssertionError
+
+        # a batch parameter named like an output column is ambiguous
+        with pxt_raises(pxt.ErrorCode.INVALID_ARGUMENT, match='matches an output column name'):
+
+            @router.compute_route(vv, path='/e5', outputs=['greeting'])
+            def _(greeting: list[KwRow]) -> Resp:  # pragma: no cover
+                raise AssertionError
+
+        # missing return annotation on a batch-shaped fn
+        with pxt_raises(pxt.ErrorCode.INVALID_ARGUMENT, match=r'pydantic\.BaseModel subclass'):
+
+            @router.compute_route(vv, path='/e6', outputs=['greeting'])
+            def _(rows: list[KwRow]):  # type: ignore[no-untyped-def]  # pragma: no cover
+                raise AssertionError
+
+        # the batch form is compute-only: for insert_route the same shape fails per-column validation
+        with pxt_raises(pxt.ErrorCode.UNSUPPORTED_OPERATION, match='must be keyword-only'):
+
+            @router.insert_route(t, path='/e7', outputs=['prompt'])
+            def _(rows: list[KwRow]) -> Resp:  # pragma: no cover
+                raise AssertionError
+
+    def test_add_update_route(self, make_catalog_path: Callable[[str], str], tmp_path: pathlib.Path) -> None:
+        """Update routes: JSON, subset inputs/outputs, FileResponse, 404 for missing row, background."""
+        p = make_catalog_path
+        skip_test_if_not_installed('fastapi')
+        from pixeltable.serving import FastAPIRouter, SqlExport
+
+        image_path = get_image_files()[0]
+        pxt.create_dir(p('test_serve'))
+        t = pxt.create_table(
+            p('test_serve.items'),
+            {'id': pxt.Int, 'text': pxt.String | None, 'value': pxt.Int | None, 'image': pxt.Image | None},
+            primary_key='id',
+        )
+        t.add_computed_column(text_upper=t.text.upper())
+        t.add_computed_column(thumb=t.image.resize([16, 16]))
+        t.insert(
+            [
+                {'id': 1, 'text': 'hello', 'value': 10, 'image': image_path},
+                {'id': 2, 'text': 'world', 'value': 20, 'image': image_path},
+            ]
+        )
+
+        # sqlite target keyed on id, pre-populated with a baseline row for id=1; method='update'
+        # exports the post-update response as an UPDATE on the target keyed by id.
+        db_connect = make_sqlite_target(
+            tmp_path / 'export.db',
+            'items_out',
+            {'id': sql.Integer, 'text': sql.VARCHAR, 'value': sql.Integer, 'text_upper': sql.VARCHAR},
+            pk_cols=['id'],
+        )
+        eng = sql.create_engine(db_connect)
+        with eng.connect() as conn:
+            conn.execute(sql.text("INSERT INTO items_out (id, text, value, text_upper) VALUES (1, 'OLD', 0, 'OLD')"))
+            conn.commit()
+        eng.dispose()
+
+        router = FastAPIRouter()
+        # /all: default inputs (text + value, excludes PK, computed, and media), all outputs
+        router.add_update_route(t, path='/all')
+        # /text-only: update only text, return only text + text_upper
+        router.add_update_route(t, path='/text-only', inputs=['text'], outputs=['text', 'text_upper'])
+        # /thumb: FileResponse variant - return computed thumb for a given row
+        router.add_update_route(t, path='/thumb', inputs=['value'], outputs=['thumb'], return_fileresponse=True)
+        # /bg: background variant
+        router.add_update_route(t, path='/bg', inputs=['value'], background=True)
+        # /export: pxt update -> SQL UPDATE keyed on id
+        router.add_update_route(
+            t,
+            path='/export',
+            inputs=['text', 'value'],
+            outputs=['id', 'text', 'value', 'text_upper'],
+            export_sql=SqlExport(db_connect=db_connect, table='items_out', method='update'),
+        )
+        client = make_test_client(router)
+
+        # /all: update row 1 (text + value; image excluded from default inputs)
+        resp = client.post('/all', json={'id': 1, 'text': 'updated', 'value': 99})
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body['text'] == 'updated' and body['value'] == 99 and body['text_upper'] == 'UPDATED'
+        row = t.where(t.id == 1).select(t.text, t.value).collect()[0]
+        assert row == {'text': 'updated', 'value': 99}
+
+        # /text-only: update row 2, partial output
+        resp = client.post('/text-only', json={'id': 2, 'text': 'changed'})
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert set(body.keys()) == {'text', 'text_upper'}
+        assert body['text'] == 'changed' and body['text_upper'] == 'CHANGED'
+
+        # /all: 404 for missing row
+        resp = client.post('/all', json={'id': 9999, 'text': 'x', 'value': 0})
+        assert resp.status_code == 404, resp.text
+
+        # /thumb: FileResponse returns thumbnail bytes for row 1
+        resp = client.post('/thumb', json={'id': 1, 'value': 99})
+        thumb_path = t.where(t.id == 1).select(p=t.thumb.localpath).collect()[0]['p']
+        assert_fileresponse_ok(resp, thumb_path, 'image/')
+
+        # /bg: background variant
+        resp = client.post('/bg', json={'id': 1, 'value': 42})
+        assert resp.status_code == 200, resp.text
+        job = resp.json()
+        result = await_background_job(client, job, require_pending=False)['result']
+        assert result['value'] == 42
+        assert t.where(t.id == 1).select(t.value).collect()[0] == {'value': 42}
+
+        # /export: pxt update + SQL UPDATE on the target keyed on id (id=1 pre-populated)
+        resp = client.post('/export', json={'id': 1, 'text': 'fresh', 'value': 7})
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {'id': 1, 'text': 'fresh', 'value': 7, 'text_upper': 'FRESH'}
+        assert_sqlite_row(
+            db_connect, 'items_out', {'id': 1}, {'id': 1, 'text': 'fresh', 'value': 7, 'text_upper': 'FRESH'}
+        )
+
+        # /export against id=2 (not in the target): pxt update succeeds, SQL UPDATE matches zero rows -> 500
+        resp = client.post('/export', json={'id': 2, 'text': 'ghost', 'value': 0})
+        assert resp.status_code == 500, resp.text
+        assert 'expected 1' in resp.json()['detail']
+
+    def test_add_update_route_errors(self, make_catalog_path: Callable[[str], str], tmp_path: pathlib.Path) -> None:
+        p = make_catalog_path
+        skip_test_if_not_installed('fastapi')
+        from pixeltable.serving import FastAPIRouter, SqlExport
+
+        pxt.create_dir(p('test_serve'))
+        t = pxt.create_table(
+            p('test_serve.items'),
+            {'id': pxt.Int, 'text': pxt.String | None, 'image': pxt.Image | None},
+            primary_key='id',
+        )
+        t.add_computed_column(text_upper=t.text.upper())
+        t_no_pk = pxt.create_table(p('test_serve.nopk'), {'text': pxt.String | None})
+        router = FastAPIRouter()
+
+        with pxt_raises(pxt.ErrorCode.UNSUPPORTED_OPERATION, match='cannot update'):
+            v = pxt.create_view(p('test_serve.items_view'), t)
+            router.add_update_route(v, path='/v')
+        with pxt_raises(pxt.ErrorCode.UNSUPPORTED_OPERATION, match='table has no primary key'):
+            router.add_update_route(t_no_pk, path='/e')
+        with pxt_raises(pxt.ErrorCode.INVALID_ARGUMENT, match="'text_upper' is a computed column"):
+            router.add_update_route(t, path='/e', inputs=['text_upper'])
+        with pxt_raises(pxt.ErrorCode.INVALID_ARGUMENT, match="'id' is a primary key column"):
+            router.add_update_route(t, path='/e', inputs=['id'])
+        with pxt_raises(pxt.ErrorCode.UNSUPPORTED_OPERATION, match="'image' is a media column"):
+            router.add_update_route(t, path='/e', inputs=['image'])
+        with pxt_raises(pxt.ErrorCode.COLUMN_NOT_FOUND, match="unknown input column 'doesnotexist'"):
+            router.add_update_route(t, path='/e', inputs=['doesnotexist'])
+        with pxt_raises(
+            pxt.ErrorCode.INVALID_ARGUMENT, match='return_fileresponse and background are mutually exclusive'
+        ):
+            router.add_update_route(t, path='/e', outputs=['image'], return_fileresponse=True, background=True)
+        with pxt_raises(pxt.ErrorCode.INVALID_ARGUMENT, match='exactly one media-typed output column'):
+            router.add_update_route(t, path='/e', outputs=['text'], return_fileresponse=True)
+
+        # export_sql + return_fileresponse: mutex (one case; SqlExporter validations are covered
+        # exhaustively by test_add_insert_route_errors -- same code path)
+        db_connect = make_sqlite_target(tmp_path / 'export.db', 'tgt', {'image': sql.VARCHAR}, pk_cols=[])
+        with pxt_raises(
+            pxt.ErrorCode.INVALID_ARGUMENT, match='export_sql and return_fileresponse are mutually exclusive'
+        ):
+            router.add_update_route(
+                t,
+                path='/e',
+                outputs=['image'],
+                return_fileresponse=True,
+                export_sql=SqlExport(db_connect=db_connect, table='tgt'),
+            )
+
+    def test_update_route(self, make_catalog_path: Callable[[str], str], tmp_path: pathlib.Path) -> None:
+        """`update_route()` decorator: custom response model, 404, background, function still callable."""
+        p = make_catalog_path
+        skip_test_if_not_installed('fastapi')
+        import pydantic
+
+        from pixeltable.serving import FastAPIRouter, SqlExport
+
+        pxt.create_dir(p('test_serve'))
+        t = pxt.create_table(
+            p('test_serve.items'), {'id': pxt.Int, 'text': pxt.String | None, 'value': pxt.Int | None}, primary_key='id'
+        )
+        t.add_computed_column(text_upper=t.text.upper())
+        t.insert([{'id': 1, 'text': 'hello', 'value': 10}, {'id': 2, 'text': 'world', 'value': 20}])
+
+        # sqlite target whose columns match UpdateResp's fields
+        db_connect = make_sqlite_target(
+            tmp_path / 'export.db', 'upd_out', {'key': sql.Integer, 'upper': sql.VARCHAR, 'doubled': sql.Integer}
+        )
+
+        router = FastAPIRouter()
+
+        class UpdateResp(pydantic.BaseModel):
+            key: int
+            upper: str
+            doubled: int
+
+        @router.update_route(
+            t,
+            path='/update',
+            inputs=['text', 'value'],
+            outputs=['id', 'text_upper', 'value'],
+            export_sql=SqlExport(db_connect=db_connect, table='upd_out'),
+        )
+        def format_response(*, id: int, text_upper: str | None, value: int | None) -> UpdateResp:
+            assert text_upper is not None and value is not None
+            return UpdateResp(key=id, upper=text_upper, doubled=value * 2)
+
+        @router.update_route(t, path='/bg', inputs=['value'], outputs=['id', 'value'], background=True)
+        def bg_response(*, id: int, value: int | None) -> UpdateResp:
+            assert value is not None
+            return UpdateResp(key=id, upper='', doubled=value * 2)
+
+        client = make_test_client(router)
+
+        # successful update: response is shaped by the decorated function
+        resp = client.post('/update', json={'id': 1, 'text': 'updated', 'value': 99})
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {'key': 1, 'upper': 'UPDATED', 'doubled': 198}
+        assert t.where(t.id == 1).select(t.text, t.value).collect()[0] == {'text': 'updated', 'value': 99}
+        # the user fn's response model fields landed in sqlite
+        assert_sqlite_row(db_connect, 'upd_out', {'key': 1}, {'key': 1, 'upper': 'UPDATED', 'doubled': 198})
+
+        # 404 for missing row
+        resp = client.post('/update', json={'id': 9999, 'text': 'x', 'value': 0})
+        assert resp.status_code == 404, resp.text
+
+        # decorator returns the function unchanged -- still directly callable
+        direct = format_response(id=7, text_upper='HI', value=5)
+        assert isinstance(direct, UpdateResp) and direct.key == 7 and direct.upper == 'HI' and direct.doubled == 10
+
+        # background variant
+        resp = client.post('/bg', json={'id': 2, 'value': 7})
+        assert resp.status_code == 200, resp.text
+        job = resp.json()
+        result = await_background_job(client, job, require_pending=False)['result']
+        assert result == {'key': 2, 'upper': '', 'doubled': 14}
+
+    def test_update_route_errors(self, make_catalog_path: Callable[[str], str]) -> None:
+        p = make_catalog_path
+        skip_test_if_not_installed('fastapi')
+        import pydantic
+
+        from pixeltable.serving import FastAPIRouter
+
+        pxt.create_dir(p('test_serve'))
+        t = pxt.create_table(p('test_serve.items'), {'id': pxt.Int, 'text': pxt.String | None}, primary_key='id')
+        t.add_computed_column(text_upper=t.text.upper())
+        router = FastAPIRouter()
+
+        # upstream validation errors (shared with add_update_route) still fire
+        with pxt_raises(pxt.ErrorCode.COLUMN_NOT_FOUND, match="unknown output column 'doesnotexist'"):
+
+            @router.update_route(t, path='/e', outputs=['doesnotexist'])
+            def _(*, doesnotexist: str) -> pydantic.BaseModel:  # pragma: no cover
+                raise AssertionError
+
+        # fn-shape errors: error_prefix must say 'update_route()'
+        class Resp(pydantic.BaseModel):
+            x: int
+
+        with pxt_raises(pxt.ErrorCode.UNSUPPORTED_OPERATION, match='update_route.*must be keyword-only'):
+
+            @router.update_route(t, path='/e1', outputs=['id'])
+            def _(id: int) -> Resp:
+                return Resp(x=id)
+
+        with pxt_raises(pxt.ErrorCode.UNSUPPORTED_OPERATION, match="update_route.*'doesnotexist' is not in"):
+
+            @router.update_route(t, path='/e2', outputs=['id'])
+            def _(*, doesnotexist: int) -> Resp:
+                return Resp(x=doesnotexist)
+
+        with pxt_raises(pxt.ErrorCode.MISSING_REQUIRED, match='update_route.*missing parameters for outputs'):
+
+            @router.update_route(t, path='/e3', outputs=['id', 'text'])
+            def _(*, id: int) -> Resp:
+                return Resp(x=id)
+
+        with pxt_raises(pxt.ErrorCode.INVALID_ARGUMENT, match=r'update_route.*pydantic\.BaseModel subclass'):
+
+            @router.update_route(t, path='/e4', outputs=['id'])
+            def _(*, id: int):  # type: ignore[no-untyped-def]
+                return {'x': id}
+
+    def test_add_delete_route(self, make_catalog_path: Callable[[str], str]) -> None:
+        """Delete routes: primary-key default, explicit match_columns, multi-col AND, 0-match, background."""
+        p = make_catalog_path
+        skip_test_if_not_installed('fastapi')
+        from pixeltable.serving import FastAPIRouter
+
+        pxt.create_dir(p('test_serve'))
+        t = pxt.create_table(
+            p('test_serve.items'),
+            {'id': pxt.Int, 'group': pxt.String | None, 'value': pxt.Int | None},
+            primary_key='id',
+        )
+        t.insert(
+            [
+                {'id': 1, 'group': 'a', 'value': 10},
+                {'id': 2, 'group': 'a', 'value': 20},
+                {'id': 3, 'group': 'b', 'value': 10},
+                {'id': 4, 'group': 'b', 'value': 20},
+                {'id': 5, 'group': 'c', 'value': 30},
+            ]
+        )
+
+        router = FastAPIRouter()
+        router.add_delete_route(t, path='/by-pk')  # defaults to primary key
+        router.add_delete_route(t, path='/by-group', match_columns=['group'])
+        router.add_delete_route(t, path='/by-group-value', match_columns=['group', 'value'])
+        router.add_delete_route(t, path='/by-pk-bg', background=True)
+        client = make_test_client(router)
+
+        # /by-pk: default pk match deletes exactly one row
+        resp = client.post('/by-pk', json={'id': 1})
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {'num_rows': 1}
+        assert t.where(t.id == 1).count() == 0
+
+        # /by-pk: 0 matches is not an error
+        resp = client.post('/by-pk', json={'id': 9999})
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {'num_rows': 0}
+
+        # /by-group: explicit single-col match, deletes all rows in the group
+        # group 'a' started with 2 rows (ids 1, 2); id 1 already deleted -> 1 row remains
+        resp = client.post('/by-group', json={'group': 'a'})
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {'num_rows': 1}
+        assert t.where(t.group == 'a').count() == 0
+
+        # /by-group-value: multi-col AND; only rows where BOTH match are deleted
+        # group 'b' has ids 3,4 with values 10,20; match (group='b', value=10) -> 1 row
+        resp = client.post('/by-group-value', json={'group': 'b', 'value': 10})
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {'num_rows': 1}
+        # the other 'b' row (id=4, value=20) should remain
+        assert t.where(t.group == 'b').count() == 1
+
+        # /by-pk-bg: background variant
+        resp = client.post('/by-pk-bg', json={'id': 5})
+        assert resp.status_code == 200, resp.text
+        job = resp.json()
+        result = await_background_job(client, job, require_pending=False)['result']
+        assert result == {'num_rows': 1}
+        assert t.where(t.id == 5).count() == 0
+
+    def test_add_delete_route_errors(self, make_catalog_path: Callable[[str], str]) -> None:
+        p = make_catalog_path
+        skip_test_if_not_installed('fastapi')
+        from pixeltable.serving import FastAPIRouter
+
+        pxt.create_dir(p('test_serve'))
+        t = pxt.create_table(p('test_serve.items'), {'id': pxt.Int, 'group': pxt.String | None}, primary_key='id')
+        t_no_pk = pxt.create_table(p('test_serve.nopk'), {'id': pxt.Int | None, 'group': pxt.String | None})
+
+        router = FastAPIRouter()
+
+        with pxt_raises(pxt.ErrorCode.UNSUPPORTED_OPERATION, match='cannot delete from'):
+            v = pxt.create_view(p('test_serve.items_view'), t)
+            router.add_delete_route(v, path='/v')
+        with pxt_raises(pxt.ErrorCode.COLUMN_NOT_FOUND, match="unknown column 'doesnotexist'"):
+            router.add_delete_route(t, path='/e', match_columns=['doesnotexist'])
+        with pxt_raises(pxt.ErrorCode.MISSING_REQUIRED, match='`match_columns` must be non-empty'):
+            router.add_delete_route(t, path='/e', match_columns=[])
+        with pxt_raises(pxt.ErrorCode.UNSUPPORTED_OPERATION, match='table has no primary key'):
+            router.add_delete_route(t_no_pk, path='/e')
+
+    @pytest.mark.parametrize(
+        ('op_name', 'first_body', 'retry_body'),
+        [('insert', {'id': 2, 'val': 20}, {'id': 3, 'val': 30}), ('delete', {'id': 1}, {'id': 2})],
+    )
+    @pytest.mark.parametrize('schema_op', ['add_column', 'drop'])
+    def test_schema_change(
+        self,
+        make_catalog_path: Callable[[str], str],
+        op_name: str,
+        first_body: dict[str, Any],
+        retry_body: dict[str, Any],
+        schema_op: str,
+    ) -> None:
+        """Schema-version bump or drop-and-recreate after route registration causes the handler to 409."""
+        p = make_catalog_path
+        skip_test_if_not_installed('fastapi')
+        from pixeltable.serving import FastAPIRouter
+
+        pxt.create_dir(p('test_serve'))
+        schema: dict[str, Any] = {'id': pxt.Int, 'val': pxt.Int | None}
+        t = pxt.create_table(p('test_serve.items'), schema, primary_key='id')
+        t.insert([{'id': 1, 'val': 10}])
+
+        router = FastAPIRouter()
+        if op_name == 'insert':
+            router.add_insert_route(t, path='/ep')
+        else:
+            router.add_delete_route(t, path='/ep')
+        client = make_test_client(router)
+
+        # baseline: endpoint works before schema change
+        resp = client.post('/ep', json=first_body)
+        assert resp.status_code == 200, resp.text
+
+        if schema_op == 'add_column':
+            # mutate the schema in place; bumps schema_version behind the route's back
+            t.add_computed_column(val_plus_1=t.val + 1)
+        else:
+            # drop and recreate at the same path; new table has a fresh UUID
+            pxt.drop_table(p('test_serve.items'), force=True)
+            pxt.create_table(p('test_serve.items'), schema, primary_key='id')
+
+        # handler now detects the mismatch and rejects the request
+        resp = client.post('/ep', json=retry_body)
+        assert resp.status_code == 409, resp.text
+        assert 'table schema changed' in resp.json()['detail']

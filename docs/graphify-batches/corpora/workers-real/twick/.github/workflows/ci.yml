@@ -1,0 +1,41 @@
+name: CI
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 8.15.4
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Build all packages (except examples-cra)
+        run: pnpm exec turbo run build --filter=!@twick/examples-cra
+
+      - name: Build examples-cra
+        run: CI=false pnpm exec turbo run build --filter=@twick/examples-cra
+        # CRA treats Webpack warnings as errors when CI=true. examples-cra hits
+        # "Critical dependency: the request of a dependency is an expression" from
+        # transitive deps (@ffmpeg/ffmpeg, mp4-wasm, etc.). CRACO ignores that warning;
+        # CI=false ensures child processes (pnpm/turbo) also see it when step env isn't inherited.

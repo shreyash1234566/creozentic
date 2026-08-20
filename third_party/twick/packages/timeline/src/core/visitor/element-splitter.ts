@@ -1,0 +1,254 @@
+import { ElementVisitor } from "./element-visitor";
+import { VideoElement } from "../elements/video.element";
+import { AudioElement } from "../elements/audio.element";
+import { ImageElement } from "../elements/image.element";
+import { TextElement } from "../elements/text.element";
+import { CaptionElement } from "../elements/caption.element";
+import { RectElement } from "../elements/rect.element";
+import { CircleElement } from "../elements/circle.element";
+import { IconElement } from "../elements/icon.element";
+import { EmojiElement } from "../elements/emoji.element";
+import { PlaceholderElement } from "../elements/placeholder.element";
+import { ElementCloner } from "./element-cloner";
+import { canSplitElement } from "../../utils/timeline.utils";
+import { ArrowElement } from "../elements/arrow.element";
+import { LineElement } from "../elements/line.element";
+import { EffectElement } from "../elements/effect.element";
+
+export interface SplitResult {
+  firstElement: any;
+  secondElement: any;
+  success: boolean;
+}
+
+export class ElementSplitter implements ElementVisitor<SplitResult> {
+  private splitTime: number;
+  private elementCloner: ElementCloner;
+  constructor(splitTime: number) {
+    this.splitTime = splitTime;
+    this.elementCloner = new ElementCloner();
+  }
+
+  /**
+   * Split text by word index, clamped to keep both sides non-empty.
+   * Returns null when a valid non-empty split is impossible.
+   */
+  private splitTextToNonEmptyParts(
+    source: string,
+    percentage: number
+  ): { first: string; second: string } | null {
+    const words = source
+      .split(/\s+/)
+      .map((w) => w.trim())
+      .filter(Boolean);
+    if (words.length < 2) return null;
+    const rawIndex = Math.floor(words.length * percentage);
+    const splitIndex = Math.min(words.length - 1, Math.max(1, rawIndex));
+    return {
+      first: words.slice(0, splitIndex).join(" "),
+      second: words.slice(splitIndex).join(" "),
+    };
+  }
+
+  visitVideoElement(element: VideoElement): SplitResult {
+    if (!canSplitElement(element, this.splitTime)) {
+      return { firstElement: null, secondElement: null, success: false };
+    }
+
+    const firstElement = this.elementCloner.visitVideoElement(
+      element
+    ) as VideoElement;
+    const secondElement = this.elementCloner.visitVideoElement(
+      element
+    ) as VideoElement;
+
+    const props = element.getProps();
+    const secondStartAt =
+      (props!.time ?? 0) +
+      (this.splitTime - element.getStart()) * (props!.playbackRate ?? 1);
+    firstElement.setEnd(this.splitTime);
+    secondElement.setStart(this.splitTime).setStartAt(secondStartAt);
+
+    return { firstElement, secondElement, success: true };
+  }
+
+  visitAudioElement(element: AudioElement): SplitResult {
+    if (!canSplitElement(element, this.splitTime)) {
+      return { firstElement: null, secondElement: null, success: false };
+    }
+    const firstElement = this.elementCloner.visitAudioElement(
+      element
+    ) as AudioElement;
+    const secondElement = this.elementCloner.visitAudioElement(
+      element
+    ) as AudioElement;
+
+    const props = element.getProps();
+    const secondStartAt =
+      (props!.time ?? 0) +
+      (this.splitTime - element.getStart()) * (props!.playbackRate ?? 1);
+    firstElement.setEnd(this.splitTime);
+    secondElement.setStart(this.splitTime).setStartAt(secondStartAt);
+
+    return { firstElement, secondElement, success: true };
+  }
+
+  visitImageElement(element: ImageElement): SplitResult {
+    if (!canSplitElement(element, this.splitTime)) {
+      return { firstElement: null, secondElement: null, success: false };
+    }
+    const firstElement = this.elementCloner.visitImageElement(
+      element
+    ) as ImageElement;
+    const secondElement = this.elementCloner.visitImageElement(
+      element
+    ) as ImageElement;
+    firstElement.setEnd(this.splitTime);
+    secondElement.setStart(this.splitTime);
+    return { firstElement, secondElement, success: true };
+  }
+
+  visitTextElement(element: TextElement): SplitResult {
+    if (!canSplitElement(element, this.splitTime)) {
+      return { firstElement: null, secondElement: null, success: false };
+    }
+    const originalText = element.getText() || "";
+    const percentage =
+      (this.splitTime - element.getStart()) / element.getDuration();
+    const splitText = this.splitTextToNonEmptyParts(originalText, percentage);
+    if (!splitText) {
+      return { firstElement: null, secondElement: null, success: false };
+    }
+    const firstElement = this.elementCloner.visitTextElement(
+      element
+    ) as TextElement;
+    firstElement.setText(splitText.first);
+    firstElement.setEnd(this.splitTime);
+    const secondElement = this.elementCloner.visitTextElement(
+      element
+    ) as TextElement;
+    secondElement.setText(splitText.second);
+    secondElement.setStart(this.splitTime);
+    return { firstElement, secondElement, success: true };
+  }
+
+  visitCaptionElement(element: CaptionElement): SplitResult {
+    if (!canSplitElement(element, this.splitTime)) {
+      return { firstElement: null, secondElement: null, success: false };
+    }
+    const originalText = element.getText() || "";
+    const percentage =
+      (this.splitTime - element.getStart()) / element.getDuration();
+    const splitText = this.splitTextToNonEmptyParts(originalText, percentage);
+    if (!splitText) {
+      return { firstElement: null, secondElement: null, success: false };
+    }
+    const firstElement = this.elementCloner.visitCaptionElement(
+      element
+    ) as CaptionElement;
+    firstElement.setText(splitText.first);
+    firstElement.setEnd(this.splitTime);
+    const secondElement = this.elementCloner.visitCaptionElement(
+      element
+    ) as CaptionElement;
+    secondElement.setText(splitText.second);
+    secondElement.setStart(this.splitTime);
+    return { firstElement, secondElement, success: true };
+  }
+
+  visitRectElement(element: RectElement): SplitResult {
+    if (!canSplitElement(element, this.splitTime)) {
+      return { firstElement: null, secondElement: null, success: false };
+    }
+    const firstElement = this.elementCloner.visitRectElement(
+      element
+    ) as RectElement;
+    const secondElement = this.elementCloner.visitRectElement(
+      element
+    ) as RectElement;
+    firstElement.setEnd(this.splitTime);
+    secondElement.setStart(this.splitTime);
+    return { firstElement, secondElement, success: true };
+  }
+
+  visitCircleElement(element: CircleElement): SplitResult {
+    if (!canSplitElement(element, this.splitTime)) {
+      return { firstElement: null, secondElement: null, success: false };
+    }
+    const firstElement = this.elementCloner.visitCircleElement(element);
+    const secondElement = this.elementCloner.visitCircleElement(element);
+    firstElement.setEnd(this.splitTime);
+    secondElement.setStart(this.splitTime);
+    return { firstElement, secondElement, success: true };
+  }
+
+  visitIconElement(element: IconElement): SplitResult {
+    if (!canSplitElement(element, this.splitTime)) {
+      return { firstElement: null, secondElement: null, success: false };
+    }
+    const firstElement = this.elementCloner.visitIconElement(element);
+    const secondElement = this.elementCloner.visitIconElement(element);
+    firstElement.setEnd(this.splitTime);
+    secondElement.setStart(this.splitTime);
+    return { firstElement, secondElement, success: true };
+  }
+
+  visitEmojiElement(element: EmojiElement): SplitResult {
+    if (!canSplitElement(element, this.splitTime)) {
+      return { firstElement: null, secondElement: null, success: false };
+    }
+    const firstElement = this.elementCloner.visitEmojiElement(element);
+    const secondElement = this.elementCloner.visitEmojiElement(element);
+    firstElement.setEnd(this.splitTime);
+    secondElement.setStart(this.splitTime);
+    return { firstElement, secondElement, success: true };
+  }
+
+  visitPlaceholderElement(element: PlaceholderElement): SplitResult {
+    if (!canSplitElement(element, this.splitTime)) {
+      return { firstElement: null, secondElement: null, success: false };
+    }
+    const firstElement = this.elementCloner.visitPlaceholderElement(element);
+    const secondElement = this.elementCloner.visitPlaceholderElement(element);
+    firstElement.setEnd(this.splitTime);
+    secondElement.setStart(this.splitTime);
+    return { firstElement, secondElement, success: true };
+  }
+
+  visitArrowElement(element: ArrowElement): SplitResult {
+    if (!canSplitElement(element, this.splitTime)) {
+      return { firstElement: null, secondElement: null, success: false };
+    }
+    const firstElement = this.elementCloner.visitArrowElement(element);
+    const secondElement = this.elementCloner.visitArrowElement(element);
+    firstElement.setEnd(this.splitTime);
+    secondElement.setStart(this.splitTime);
+    return { firstElement, secondElement, success: true };
+  }
+
+  visitLineElement(element: LineElement): SplitResult {
+    if (!canSplitElement(element, this.splitTime)) {
+      return { firstElement: null, secondElement: null, success: false };
+    }
+    const firstElement = this.elementCloner.visitLineElement(element) as LineElement;
+    const secondElement = this.elementCloner.visitLineElement(element) as LineElement;
+    firstElement.setEnd(this.splitTime);
+    secondElement.setStart(this.splitTime);
+    return { firstElement, secondElement, success: true };
+  }
+
+  visitEffectElement(element: EffectElement): SplitResult {
+    if (!canSplitElement(element, this.splitTime)) {
+      return { firstElement: null, secondElement: null, success: false };
+    }
+    const firstElement = this.elementCloner.visitEffectElement(
+      element
+    ) as EffectElement;
+    const secondElement = this.elementCloner.visitEffectElement(
+      element
+    ) as EffectElement;
+    firstElement.setEnd(this.splitTime);
+    secondElement.setStart(this.splitTime);
+    return { firstElement, secondElement, success: true };
+  }
+}

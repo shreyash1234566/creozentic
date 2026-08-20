@@ -1,0 +1,177 @@
+import copy
+import logging
+from typing import Any, Callable, TypeVar
+from uuid import UUID
+
+import sqlalchemy as sql
+from sqlalchemy import Column, LargeBinary, MetaData
+from sqlalchemy.dialects.postgresql import JSONB, UUID as SA_UUID
+
+from pixeltable.metadata.schema import Table, TableSchemaVersion
+
+__logger = logging.getLogger(__name__)
+
+# The legacy 'functions' table stored pickled UDF bodies. It was removed from the live schema and
+# dropped by the version 54->55 converter; converters that upgrade older databases still read and rewrite it, so
+# it is defined here on a private MetaData instance (base_metadata.create_all() therefore never recreates it for a fresh
+# database).
+_legacy_metadata = MetaData()
+legacy_functions = sql.Table(
+    'functions',
+    _legacy_metadata,
+    Column('id', SA_UUID(as_uuid=True), primary_key=True),
+    Column('md', JSONB),
+    Column('binary_obj', LargeBinary),
+)
+
+
+def convert_table_md(
+    conn: sql.Connection,
+    table_md_updater: Callable[[dict, UUID], None] | None = None,
+    column_md_updater: Callable[[dict], None] | None = None,
+    external_store_md_updater: Callable[[dict], None] | None = None,
+    substitution_fn: Callable[[str | None, Any], tuple[str | None, Any] | None] | None = None,
+    table_modifier: Callable[[sql.Connection, UUID, dict, dict], None] | None = None,
+) -> None:
+    """
+    Converts schema.TableMd dicts based on the specified conversion functions.
+
+    Args:
+        conn: The SQLAlchemy connection to run the conversion on.
+        table_md_updater: A function that updates schema.TableMd dicts in place.
+            It takes two arguments: the metadata dict (new values) and the table id.
+        column_md_updater: A function that updates schema.ColumnMd dicts in place.
+        external_store_md_updater: A function that updates the external store metadata in place.
+        substitution_fn: A function that substitutes metadata values. If specified, all metadata will be traversed
+            recursively, and `substitution_fn` will be called once for each metadata entry. If the entry appears in
+            a dict as a `(k, v)` pair, then `substitution_fn(k, v)` will be called. If the entry appears in a list,
+            then `substitution_fn(None, v)` will be called. If `substitution_fn` returns a tuple `(k', v')`, then
+            the original entry will be replaced, and the traversal will continue with `v'`.
+    """
+    # avoid a SELECT * here, which breaks when we add new columns to Table
+    for row in conn.execute(sql.select(Table.id, Table.md)):
+        tbl_id = row[0]
+        table_md = row[1]
+        assert isinstance(table_md, dict)
+        updated_table_md = copy.deepcopy(table_md)
+        if table_md_updater is not None:
+            table_md_updater(updated_table_md, tbl_id)
+        if column_md_updater is not None:
+            __update_column_md(updated_table_md, column_md_updater)
+        if external_store_md_updater is not None:
+            __update_external_store_md(updated_table_md, external_store_md_updater)
+        if substitution_fn is not None:
+            updated_table_md = __substitute_md_rec(updated_table_md, substitution_fn)
+        if updated_table_md != table_md:
+            __logger.info(f'Updating schema for table: {tbl_id}')
+            conn.execute(sql.update(Table).where(Table.id == tbl_id).values(md=updated_table_md))
+        if table_modifier is not None:
+            table_modifier(conn, tbl_id, table_md, updated_table_md)
+
+    # the legacy 'functions' table is dropped once a database reaches version 55, so it may be absent here
+    if sql.inspect(conn).has_table('functions'):
+        # select explicit columns (not SELECT *) so a future column addition/reorder can't shift md's position
+        for row in conn.execute(sql.select(legacy_functions.c.id, legacy_functions.c.md)):
+            fn_id = row[0]
+            function_md = row[1]
+            assert isinstance(function_md, dict)
+            updated_function_md = copy.deepcopy(function_md)
+            if substitution_fn is not None:
+                updated_function_md = __substitute_md_rec(updated_function_md, substitution_fn)
+            if updated_function_md != function_md:
+                __logger.info(f'Updating function: {fn_id}')
+                conn.execute(
+                    sql.update(legacy_functions).where(legacy_functions.c.id == fn_id).values(md=updated_function_md)
+                )
+
+
+def __update_column_md(table_md: dict, column_md_updater: Callable[[dict], None]) -> None:
+    columns_md = table_md['column_md']
+    assert isinstance(columns_md, dict)
+    for column_md in columns_md.values():
+        column_md_updater(column_md)
+
+
+def __update_external_store_md(table_md: dict, external_store_md_updater: Callable[[dict], None]) -> None:
+    stores_md = table_md['external_stores']
+    assert isinstance(stores_md, list)
+    for store_md in stores_md:
+        external_store_md_updater(store_md)
+
+
+def __substitute_md_rec(md: Any, substitution_fn: Callable[[str | None, Any], tuple[str | None, Any] | None]) -> Any:
+    if isinstance(md, dict):
+        updated_dict: dict[str, Any] = {}
+        for k, v in md.items():
+            assert isinstance(k, str)
+            substitute = substitution_fn(k, v)
+            if substitute is not None:
+                updated_k, updated_v = substitute
+                updated_dict[updated_k] = __substitute_md_rec(updated_v, substitution_fn)
+            else:
+                updated_dict[k] = __substitute_md_rec(v, substitution_fn)
+        return updated_dict
+    elif isinstance(md, list):
+        updated_list: list[Any] = []
+        for v in md:
+            substitute = substitution_fn(None, v)
+            if substitute is not None:
+                _, updated_v = substitute
+                updated_list.append(__substitute_md_rec(updated_v, substitution_fn))
+            else:
+                updated_list.append(__substitute_md_rec(v, substitution_fn))
+        return updated_list
+    else:
+        return md
+
+
+def convert_table_schema_version_md(
+    conn: sql.Connection,
+    table_schema_version_md_updater: Callable[[dict], None] | None = None,
+    schema_column_updater: Callable[[dict], None] | None = None,
+) -> None:
+    """
+    Converts schema.TableSchemaVersionMd dicts based on the specified conversion functions.
+
+    Args:
+        conn: The SQLAlchemy connection to run the conversion on.
+        table_schema_version_md_updater: A function that updates schema.TableSchemaVersionMd dicts in place.
+        schema_column_updater: A function that updates schema.SchemaColumn dicts in place.
+    """
+    stmt = sql.select(TableSchemaVersion.tbl_id, TableSchemaVersion.schema_version, TableSchemaVersion.md)
+    for row in conn.execute(stmt):
+        tbl_id, schema_version, md = row[0], row[1], row[2]
+        assert isinstance(md, dict)
+        updated_md = copy.deepcopy(md)
+        if table_schema_version_md_updater is not None:
+            table_schema_version_md_updater(updated_md)
+        if schema_column_updater is not None:
+            __update_schema_column(updated_md, schema_column_updater)
+        if updated_md != md:
+            __logger.info(f'Updating TableSchemaVersion(tbl_id={tbl_id}, schema_version={schema_version})')
+            update_stmt = (
+                sql.update(TableSchemaVersion)
+                .where(TableSchemaVersion.tbl_id == tbl_id)
+                .where(TableSchemaVersion.schema_version == schema_version)
+                .values(md=updated_md)
+            )
+            conn.execute(update_stmt)
+
+
+def __update_schema_column(table_schema_version_md: dict, schema_column_updater: Callable[[dict], None]) -> None:
+    cols = table_schema_version_md['columns']
+    assert isinstance(cols, dict)
+    for schema_col in cols.values():
+        schema_column_updater(schema_col)
+
+
+T = TypeVar('T')
+
+
+def convert_sql_table_record(schema: type[T], conn: sql.Connection, record_updater: Callable[[T], None]) -> None:
+    # Run the ORM updates within the caller's transaction: a savepoint-bound session flushes onto conn and
+    # commit() releases the savepoint, leaving the enclosing transaction to commit the changes.
+    with sql.orm.Session(bind=conn, join_transaction_mode='create_savepoint') as session:
+        for record in session.query(schema).all():
+            record_updater(record)
+        session.commit()

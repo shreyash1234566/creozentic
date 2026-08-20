@@ -1,0 +1,233 @@
+@import url("https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap");
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Fraunces", Georgia, serif;
+  --font-sans: "Inter", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  --color-paper: #f4efe6;
+  --color-paper-deep: #ece5d7;
+  --color-ink: #201b13;
+  --color-ink-soft: #574d3d;
+  --color-line: #d6cdbb;
+  --color-saffron: #d1560f;
+  --color-saffron-deep: #a6410a;
+  --color-marigold: #e79a1f;
+  --color-indigo: #2e3a6e;
+  --color-leaf: #4a6b3f;
+  --color-card: #fbf8f2;
+}
+
+:root {
+  --background: var(--color-paper);
+  --foreground: var(--color-ink);
+}
+
+* {
+  border-color: var(--color-line);
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background-color: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background-color: var(--color-saffron);
+  color: #fff;
+}
+
+.field-label {
+  display: block;
+  margin-bottom: 0.375rem;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.2;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-ink-soft);
+}
+
+/* Hide scrollbars until scrolling */
+* {
+  scrollbar-width: none;
+}
+*::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+/* ── Landing motion primitives ── */
+@keyframes floaty {
+  0%,
+  100% {
+    transform: translateY(0) translateZ(0);
+  }
+  50% {
+    transform: translateY(-14px) translateZ(0);
+  }
+}
+@keyframes floaty-slow {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-22px);
+  }
+}
+@keyframes drift {
+  0% {
+    transform: translate(0, 0) scale(1);
+  }
+  33% {
+    transform: translate(4%, -6%) scale(1.08);
+  }
+  66% {
+    transform: translate(-5%, 4%) scale(0.96);
+  }
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+}
+@keyframes spin-slow {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+@keyframes reveal-up {
+  from {
+    opacity: 0;
+    transform: translateY(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes sheen {
+  from {
+    background-position: -200% 0;
+  }
+  to {
+    background-position: 200% 0;
+  }
+}
+@keyframes scan {
+  0% {
+    top: 0%;
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  90% {
+    opacity: 1;
+  }
+  100% {
+    top: 100%;
+    opacity: 0;
+  }
+}
+@keyframes word-in {
+  0% {
+    opacity: 0;
+    transform: translateY(14px) rotateX(-40deg);
+  }
+  12%,
+  88% {
+    opacity: 1;
+    transform: translateY(0) rotateX(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-14px) rotateX(40deg);
+  }
+}
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.9);
+    opacity: 0.7;
+  }
+  70% {
+    transform: scale(1.6);
+    opacity: 0;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.anim-floaty {
+  animation: floaty 6s ease-in-out infinite;
+}
+.anim-floaty-slow {
+  animation: floaty-slow 9s ease-in-out infinite;
+}
+.anim-drift {
+  animation: drift 22s ease-in-out infinite;
+}
+.anim-spin-slow {
+  animation: spin-slow 40s linear infinite;
+}
+.anim-marquee {
+  animation: marquee 32s linear infinite;
+}
+.anim-scan {
+  animation: scan 3.2s ease-in-out infinite;
+}
+.anim-pulse-ring {
+  animation: pulse-ring 2.4s ease-out infinite;
+}
+
+.reveal {
+  opacity: 0;
+}
+.reveal.in {
+  animation: reveal-up 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.perspective {
+  perspective: 1400px;
+}
+.preserve-3d {
+  transform-style: preserve-3d;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .anim-floaty,
+  .anim-floaty-slow,
+  .anim-drift,
+  .anim-spin-slow,
+  .anim-marquee,
+  .anim-scan,
+  .anim-pulse-ring {
+    animation: none;
+  }
+  .reveal {
+    opacity: 1;
+  }
+  .reveal.in {
+    animation: none;
+  }
+}

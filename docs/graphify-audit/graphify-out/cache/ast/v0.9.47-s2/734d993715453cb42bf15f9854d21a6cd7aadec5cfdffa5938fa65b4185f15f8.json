@@ -1,0 +1,1 @@
+{"nodes": [{"id": "$graphify-root$_third_party_temporal_common_authorization_principal_go", "label": "principal.go", "file_type": "code", "source_file": "third_party/temporal/common/authorization/principal.go", "source_location": "L1"}], "edges": [], "raw_calls": [], "go_imports": {}}

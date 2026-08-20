@@ -1,0 +1,1 @@
+{"nodes": [{"id": "$graphify-root$_third_party_temporal_chasm_archetype_go", "label": "archetype.go", "file_type": "code", "source_file": "third_party/temporal/chasm/archetype.go", "source_location": "L1"}], "edges": [], "raw_calls": [], "go_imports": {}}

@@ -1,0 +1,896 @@
+from __future__ import annotations
+
+import enum
+import json
+import logging
+import sys
+from dataclasses import dataclass, field, fields
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Iterable, Iterator, Literal, Sequence, cast
+
+import numpy as np
+import pandas as pd
+import pyarrow as pa
+import pyarrow.compute as pc
+import pyarrow.types as pat
+import pydantic
+import pydantic_core
+from pyarrow.parquet import ParquetDataset
+
+import pixeltable as pxt
+import pixeltable.exceptions as excs
+import pixeltable.type_system as ts
+from pixeltable.io.pandas import _df_check_primary_key_values, _df_row_to_pxt_row, df_infer_schema
+from pixeltable.utils.http import fetch_url
+from pixeltable.utils.pydantic import is_json_convertible
+
+from .utils import normalize_schema_names
+
+_logger = logging.getLogger(__name__)
+
+
+if TYPE_CHECKING:
+    import datasets  # type: ignore[import-untyped]
+
+    from pixeltable.globals import RowData, TableDataSource
+
+
+class TableDataConduitFormat(str, enum.Enum):
+    """Supported formats for TableDataConduit"""
+
+    JSON = 'json'
+    CSV = 'csv'
+    EXCEL = 'excel'
+    PARQUET = 'parquet'
+
+    @classmethod
+    def is_valid(cls, x: Any) -> bool:
+        if isinstance(x, str):
+            return x.lower() in [c.value for c in cls]
+        return False
+
+
+@dataclass
+class TableDataConduit:
+    source: 'TableDataSource'
+    source_format: str | None = None
+    source_column_map: dict[str, str] | None = None
+    if_row_exists: Literal['update', 'ignore', 'error'] = 'error'
+    pxt_schema: dict[str, ts.ColumnType] | None = None
+    src_schema_overrides: dict[str, ts.ColumnType] | None = None
+    src_schema: dict[str, ts.ColumnType] | None = None
+    pxt_pk: list[str] | None = None
+    src_pk: list[str] | None = None
+    valid_rows: RowData | None = None
+    extra_fields: dict[str, Any] = field(default_factory=dict)
+    tbl_name: str | None = None
+
+    reqd_col_names: set[str] = field(default_factory=set)
+    computed_col_names: set[str] = field(default_factory=set)
+
+    total_rows: int = 0  # total number of rows emitted via valid_row_batch Iterator
+
+    _K_BATCH_SIZE_BYTES = 256 * 2**20
+
+    @staticmethod
+    def create(
+        source: 'TableDataSource',
+        *,
+        source_format: str | None = None,
+        src_schema_overrides: dict[str, ts.ColumnType] | None = None,
+        extra_fields: dict[str, Any] | None = None,
+    ) -> 'TableDataConduit':
+        """Factory that returns a concrete TableDataConduit subclass based on the source type."""
+        assert source_format is None or TableDataConduitFormat.is_valid(source_format), (
+            f'Invalid source_format {source_format}'
+        )
+        if isinstance(source, Sequence) and len(source) > 0 and isinstance(source[0], pydantic.BaseModel):
+            return PydanticTableDataConduit(source)
+
+        tds = TableDataConduit(
+            source, source_format=source_format, src_schema_overrides=src_schema_overrides, extra_fields=extra_fields
+        )
+        if isinstance(tds.source, (pxt.Table, pxt.Query)):
+            return QueryTableDataConduit.from_tds(tds)
+        if isinstance(tds.source, pd.DataFrame):
+            return PandasTableDataConduit.from_tds(tds)
+        if HFTableDataConduit.is_applicable(tds):
+            return HFTableDataConduit.from_tds(tds)
+        if tds.source_format == 'csv' or (isinstance(tds.source, str) and '.csv' in tds.source.lower()):
+            return CSVTableDataConduit.from_tds(tds)
+        if tds.source_format == 'excel' or (isinstance(tds.source, str) and '.xls' in tds.source.lower()):
+            return ExcelTableDataConduit.from_tds(tds)
+        if tds.source_format == 'json' or (isinstance(tds.source, str) and '.json' in tds.source.lower()):
+            return JsonTableDataConduit.from_tds(tds)
+        if tds.source_format == 'parquet' or (
+            isinstance(tds.source, str) and any(s in tds.source.lower() for s in ['.parquet', '.pq', '.parq'])
+        ):
+            return ParquetTableDataConduit.from_tds(tds)
+        if tds.is_rowdata_structure(tds.source) or isinstance(tds.source, Iterator):
+            return RowDataTableDataConduit.from_tds(tds)
+        raise excs.RequestError(
+            excs.ErrorCode.UNSUPPORTED_OPERATION, f'Unsupported data source type: {type(tds.source)}'
+        )
+
+    def __post_init__(self) -> None:
+        """If no extra_fields were provided, initialize to empty dict"""
+        if self.extra_fields is None:
+            self.extra_fields = {}
+
+    @classmethod
+    def is_rowdata_structure(cls, d: TableDataSource) -> bool:
+        if not isinstance(d, list) or len(d) == 0:
+            return False
+        return all(isinstance(row, dict) for row in d)
+
+    def is_direct_query(self) -> bool:
+        return isinstance(self.source, pxt.Query) and self.source_column_map is None
+
+    def normalize_pxt_schema_types(self) -> None:
+        for name, coltype in self.pxt_schema.items():
+            self.pxt_schema[name] = ts.ColumnType.normalize_type(coltype)
+
+    def infer_schema(self) -> dict[str, ts.ColumnType]:
+        raise NotImplementedError
+
+    def valid_row_batch(self) -> Iterator[RowData]:
+        raise NotImplementedError
+
+    def prepare_for_insert_into_table(self) -> None:
+        if self.source is None:
+            return
+        raise NotImplementedError
+
+    def add_table_info(self, table: pxt.Table) -> None:
+        """Add information about the table into which we are inserting data"""
+        assert isinstance(table, pxt.Table)
+        self.pxt_schema = table._get_schema()
+        self.pxt_pk = []
+        for col_md in table._tbl_path.column_md():
+            if col_md.name is None:
+                continue
+            if col_md.is_pk:
+                self.pxt_pk.append(col_md.name)
+            if col_md.is_computed:
+                self.computed_col_names.add(col_md.name)
+            elif not col_md.col_type.nullable:
+                # required for insert: non-nullable and not computed
+                self.reqd_col_names.add(col_md.name)
+        self.src_pk = []
+        self.tbl_name = table._name()
+
+    # Check source columns : required, computed, unknown
+    def check_source_columns_are_insertable(self, columns: Iterable[str]) -> None:
+        col_name_set: set[str] = set()
+        for col_name in columns:  # FIXME
+            mapped_col_name = self.source_column_map.get(col_name, col_name)
+            col_name_set.add(mapped_col_name)
+            if mapped_col_name not in self.pxt_schema:
+                raise excs.NotFoundError(excs.ErrorCode.COLUMN_NOT_FOUND, f'Unknown column name {mapped_col_name}')
+            if mapped_col_name in self.computed_col_names:
+                raise excs.RequestError(
+                    excs.ErrorCode.UNSUPPORTED_OPERATION, f'Value for computed column {mapped_col_name}'
+                )
+        missing_cols = self.reqd_col_names - col_name_set
+        if len(missing_cols) > 0:
+            raise excs.RequestError(
+                excs.ErrorCode.MISSING_REQUIRED, f'Missing required column(s) ({", ".join(missing_cols)})'
+            )
+
+
+class QueryTableDataConduit(TableDataConduit):
+    pxt_query: pxt.Query = None
+
+    @classmethod
+    def from_tds(cls, tds: TableDataConduit) -> 'QueryTableDataConduit':
+        tds_fields = {f.name for f in fields(tds)}
+        kwargs = {k: v for k, v in tds.__dict__.items() if k in tds_fields}
+        t = cls(**kwargs)
+        if isinstance(tds.source, pxt.Table):
+            t.pxt_query = tds.source.select()
+        else:
+            assert isinstance(tds.source, pxt.Query)
+            t.pxt_query = tds.source
+        return t
+
+    def infer_schema(self) -> dict[str, ts.ColumnType]:
+        # TODO: re-resolve schema at execution time if this is a SELECT *
+        self.pxt_schema = self.pxt_query.schema
+        self.pxt_pk = self.src_pk
+        return self.pxt_schema
+
+    def prepare_for_insert_into_table(self) -> None:
+        if self.source_column_map is None:
+            self.source_column_map = {}
+        self.check_source_columns_are_insertable(self.pxt_query.schema.keys())
+
+
+class RowDataTableDataConduit(TableDataConduit):
+    raw_rows: RowData | None = None
+    disable_mapping: bool = True
+    batch_count: int = 0
+
+    @classmethod
+    def from_tds(cls, tds: TableDataConduit) -> 'RowDataTableDataConduit':
+        tds_fields = {f.name for f in fields(tds)}
+        kwargs = {k: v for k, v in tds.__dict__.items() if k in tds_fields}
+        t = cls(**kwargs)
+        if isinstance(tds.source, Iterator):
+            # Instantiate the iterator to get the raw rows here
+            t.raw_rows = list(tds.source)
+        elif TYPE_CHECKING:
+            t.raw_rows = cast(RowData, tds.source)
+        else:
+            t.raw_rows = tds.source
+        t.batch_count = 0
+        return t
+
+    def infer_schema(self) -> dict[str, ts.ColumnType]:
+        from .datarows import _infer_schema_from_rows
+
+        if self.source_column_map is None:
+            if self.src_schema_overrides is None:
+                self.src_schema_overrides = {}
+            self.src_schema = _infer_schema_from_rows(self.raw_rows, self.src_schema_overrides, self.src_pk)
+            self.pxt_schema, self.pxt_pk, self.source_column_map = normalize_schema_names(
+                self.src_schema, self.src_pk, self.src_schema_overrides, self.disable_mapping
+            )
+            self.normalize_pxt_schema_types()
+        else:
+            raise NotImplementedError()
+
+        self.prepare_for_insert_into_table()
+        return self.pxt_schema
+
+    def prepare_for_insert_into_table(self) -> None:
+        # Converting rows to insertable format is not needed, misnamed columns and types
+        # are errors in the incoming row format
+        if self.source_column_map is None:
+            self.source_column_map = {}
+        self.valid_rows = [self._translate_row(row) for row in self.raw_rows]
+
+        self.batch_count = 1 if self.raw_rows is not None else 0
+
+    def _translate_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(row, dict):
+            raise excs.RequestError(excs.ErrorCode.UNSUPPORTED_OPERATION, f'row {row} is not a dictionary')
+
+        col_names: set[str] = set()
+        output_row: dict[str, Any] = {}
+        for col_name, val in row.items():
+            mapped_col_name = self.source_column_map.get(col_name, col_name)
+            col_names.add(mapped_col_name)
+            if mapped_col_name not in self.pxt_schema:
+                raise excs.NotFoundError(
+                    excs.ErrorCode.COLUMN_NOT_FOUND, f'Unknown column name {mapped_col_name} in row {row}'
+                )
+            if mapped_col_name in self.computed_col_names:
+                raise excs.RequestError(
+                    excs.ErrorCode.UNSUPPORTED_OPERATION, f'Value for computed column {mapped_col_name} in row {row}'
+                )
+            # basic sanity checks here
+            try:
+                checked_val = self.pxt_schema[mapped_col_name].create_literal(val)
+            except TypeError as e:
+                msg = str(e)
+                raise excs.RequestError(
+                    excs.ErrorCode.UNSUPPORTED_OPERATION,
+                    f'Error in column {col_name}: {msg[0].lower() + msg[1:]}\nRow: {row}',
+                ) from e
+            output_row[mapped_col_name] = checked_val
+        missing_cols = self.reqd_col_names - col_names
+        if len(missing_cols) > 0:
+            raise excs.RequestError(
+                excs.ErrorCode.MISSING_REQUIRED, f'Missing required column(s) ({", ".join(missing_cols)}) in row {row}'
+            )
+        return output_row
+
+    def valid_row_batch(self) -> Iterator[RowData]:
+        if self.batch_count > 0:
+            self.batch_count -= 1
+            yield self.valid_rows
+
+
+class PandasTableDataConduit(TableDataConduit):
+    pd_df: pd.DataFrame = None
+    batch_count: int = 0
+
+    @classmethod
+    def from_tds(cls, tds: TableDataConduit) -> PandasTableDataConduit:
+        tds_fields = {f.name for f in fields(tds)}
+        kwargs = {k: v for k, v in tds.__dict__.items() if k in tds_fields}
+        t = cls(**kwargs)
+        assert isinstance(tds.source, pd.DataFrame)
+        t.pd_df = tds.source
+        t.batch_count = 0
+        return t
+
+    def infer_schema_part1(self) -> tuple[dict[str, ts.ColumnType], list[str]]:
+        """Return inferred schema, inferred primary key, and source column map"""
+        if self.source_column_map is None:
+            if self.src_schema_overrides is None:
+                self.src_schema_overrides = {}
+            self.src_schema = df_infer_schema(self.pd_df, self.src_schema_overrides, self.src_pk)
+            inferred_schema, inferred_pk, self.source_column_map = normalize_schema_names(
+                self.src_schema, self.src_pk, self.src_schema_overrides, False
+            )
+            return inferred_schema, inferred_pk
+        else:
+            raise NotImplementedError()
+
+    def infer_schema(self) -> dict[str, ts.ColumnType]:
+        self.pxt_schema, self.pxt_pk = self.infer_schema_part1()
+        self.normalize_pxt_schema_types()
+        _df_check_primary_key_values(self.pd_df, self.src_pk)
+        self.prepare_insert()
+        return self.pxt_schema
+
+    def prepare_for_insert_into_table(self) -> None:
+        _, inferred_pk = self.infer_schema_part1()
+        assert len(inferred_pk) == 0
+        self.prepare_insert()
+
+    def prepare_insert(self) -> None:
+        if self.source_column_map is None:
+            self.source_column_map = {}
+        self.check_source_columns_are_insertable(self.pd_df.columns)
+        # Convert all rows to insertable format
+        self.valid_rows = [
+            _df_row_to_pxt_row(row, self.src_schema, self.source_column_map) for row in self.pd_df.itertuples()
+        ]
+        self.batch_count = 1
+
+    def valid_row_batch(self) -> Iterator[RowData]:
+        if self.batch_count > 0:
+            self.batch_count -= 1
+            yield self.valid_rows
+
+
+class CSVTableDataConduit(TableDataConduit):
+    @classmethod
+    def from_tds(cls, tds: TableDataConduit) -> 'PandasTableDataConduit':
+        tds_fields = {f.name for f in fields(tds)}
+        kwargs = {k: v for k, v in tds.__dict__.items() if k in tds_fields}
+        t = cls(**kwargs)
+        assert isinstance(t.source, str)
+        path = fetch_url(t.source, allow_local_file=True)
+        t.source = pd.read_csv(path, **t.extra_fields)
+        return PandasTableDataConduit.from_tds(t)
+
+
+class ExcelTableDataConduit(TableDataConduit):
+    @classmethod
+    def from_tds(cls, tds: TableDataConduit) -> 'PandasTableDataConduit':
+        tds_fields = {f.name for f in fields(tds)}
+        kwargs = {k: v for k, v in tds.__dict__.items() if k in tds_fields}
+        t = cls(**kwargs)
+        assert isinstance(t.source, str)
+        path = fetch_url(t.source, allow_local_file=True)
+        t.source = pd.read_excel(path, **t.extra_fields)
+        return PandasTableDataConduit.from_tds(t)
+
+
+def _parse_jsonl_from_path(path: Path, extra_fields: dict[str, Any]) -> list[dict]:
+    """Parse JSONL from path line-by-line. Stops on first invalid line."""
+    rows: list[dict] = []
+    with path.open(encoding='utf-8') as fp:
+        for lineno, line in enumerate(fp, start=1):
+            if not (line := line.strip()):
+                continue
+            try:
+                obj = json.loads(line, **extra_fields)
+            except json.JSONDecodeError as e:
+                raise excs.RequestError(
+                    excs.ErrorCode.INVALID_DATA_FORMAT, f'Invalid JSONL line {lineno}: {line!r}'
+                ) from e
+            if not isinstance(obj, dict):
+                raise excs.RequestError(
+                    excs.ErrorCode.INVALID_ARGUMENT,
+                    f'JSONL line {lineno} must be a JSON object, got {type(obj).__name__}',
+                )
+            rows.append(obj)
+    return rows
+
+
+class JsonTableDataConduit(TableDataConduit):
+    @classmethod
+    def from_tds(cls, tds: TableDataConduit) -> RowDataTableDataConduit:
+        tds_fields = {f.name for f in fields(tds)}
+        kwargs = {k: v for k, v in tds.__dict__.items() if k in tds_fields}
+        t = cls(**kwargs)
+        assert isinstance(t.source, str)
+        source_str = t.source
+        path = fetch_url(source_str, allow_local_file=True)
+        if source_str.lower().rstrip('/').endswith('.jsonl'):
+            rows = _parse_jsonl_from_path(path, t.extra_fields)
+        else:
+            rows = json.loads(path.read_text(encoding='utf-8'), **t.extra_fields)
+        t.source = rows
+        t2 = RowDataTableDataConduit.from_tds(t)
+        t2.disable_mapping = False
+        return t2
+
+
+class HFTableDataConduit(TableDataConduit):
+    """HuggingFace dataset importer"""
+
+    column_name_for_split: str | None = None
+    categorical_features: dict[str, dict[int, str]]
+    dataset_dict: dict[str, 'datasets.Dataset'] = None  # key: split name
+    hf_schema_source: dict[str, Any] = None
+
+    @classmethod
+    def from_tds(cls, tds: TableDataConduit) -> HFTableDataConduit:
+        tds_fields = {f.name for f in fields(tds)}
+        kwargs = {k: v for k, v in tds.__dict__.items() if k in tds_fields}
+        t = cls(**kwargs)
+        import datasets
+
+        assert cls._is_dataset_class(tds.source)
+        if 'column_name_for_split' in t.extra_fields:
+            t.column_name_for_split = t.extra_fields['column_name_for_split']
+
+        if isinstance(tds.source, (datasets.IterableDataset, datasets.IterableDatasetDict)):
+            tds.source = tds.source.with_format('arrow')
+
+        if isinstance(tds.source, (datasets.Dataset, datasets.IterableDataset)):
+            split_name = str(tds.source.split) if tds.source.split is not None else None
+            t.dataset_dict = {split_name: tds.source}
+        else:
+            assert isinstance(tds.source, (datasets.DatasetDict, datasets.IterableDatasetDict))
+            t.dataset_dict = dict(tds.source)
+
+        # Disable auto-decoding for Audio and Image columns, we want to write the bytes directly to temp files
+        for ds_split_name, dataset in list(t.dataset_dict.items()):
+            for col_name, feature in dataset.features.items():
+                if isinstance(feature, (datasets.Audio, datasets.Image)):
+                    t.dataset_dict[ds_split_name] = t.dataset_dict[ds_split_name].cast_column(
+                        col_name, feature.__class__(decode=False)
+                    )
+        return t
+
+    @classmethod
+    def _is_dataset_class(cls, obj: Any) -> bool:
+        if 'datasets' not in sys.modules:
+            return False
+        import datasets
+
+        return isinstance(
+            obj, (datasets.Dataset, datasets.DatasetDict, datasets.IterableDataset, datasets.IterableDatasetDict)
+        )
+
+    @classmethod
+    def is_applicable(cls, tds: TableDataConduit) -> bool:
+        return (
+            isinstance(tds.source_format, str) and tds.source_format.lower() == 'huggingface'
+        ) or cls._is_dataset_class(tds.source)
+
+    def infer_schema_part1(self) -> tuple[dict[str, ts.ColumnType], list[str]]:
+        from pixeltable.io.hf_datasets import _get_hf_schema, huggingface_schema_to_pxt_schema
+
+        if self.source_column_map is None:
+            if self.src_schema_overrides is None:
+                self.src_schema_overrides = {}
+            if self.src_pk is None:
+                self.src_pk = []
+            self.hf_schema_source = _get_hf_schema(self.source)
+            self.src_schema = huggingface_schema_to_pxt_schema(
+                self.hf_schema_source, self.src_schema_overrides, self.src_pk
+            )
+
+            # Add the split column to the schema if requested
+            if self.column_name_for_split is not None:
+                if self.column_name_for_split in self.src_schema:
+                    raise excs.AlreadyExistsError(
+                        excs.ErrorCode.COLUMN_ALREADY_EXISTS,
+                        f'Column name `{self.column_name_for_split}` already exists in dataset schema;'
+                        f'provide a different `column_name_for_split`',
+                    )
+                self.src_schema[self.column_name_for_split] = ts.StringType(nullable=True)
+
+            inferred_schema, inferred_pk, self.source_column_map = normalize_schema_names(
+                self.src_schema, self.src_pk, self.src_schema_overrides
+            )
+            return inferred_schema, inferred_pk
+        else:
+            raise NotImplementedError()
+
+    def infer_schema(self) -> dict[str, Any]:
+        self.pxt_schema, self.pxt_pk = self.infer_schema_part1()
+        self.normalize_pxt_schema_types()
+        self.prepare_insert()
+        return self.pxt_schema
+
+    def prepare_for_insert_into_table(self) -> None:
+        _, inferred_pk = self.infer_schema_part1()
+        assert len(inferred_pk) == 0
+        self.prepare_insert()
+
+    def prepare_insert(self) -> None:
+        import datasets
+
+        # Extract all class labels from the dataset to translate category ints to strings
+        self.categorical_features = {
+            feature_name: feature_type.names
+            for (feature_name, feature_type) in self.hf_schema_source.items()
+            if isinstance(feature_type, datasets.ClassLabel)
+        }
+        if self.source_column_map is None:
+            self.source_column_map = {}
+        self.check_source_columns_are_insertable(self.hf_schema_source.keys())
+
+    def _convert_column(self, column: 'pa.ChunkedArray', feature: object) -> list:
+        """
+        Convert an Arrow column to a list of Python values based on HF feature type.
+        Handles all feature types at the column level, recursing for structs.
+        Returns a list of length chunk_size.
+        """
+        import datasets
+
+        # return scalars as Python scalars
+        if isinstance(feature, datasets.Value):
+            return column.to_pylist()
+
+        # ClassLabel: int -> string name
+        if isinstance(feature, datasets.ClassLabel):
+            values = column.to_pylist()
+            return [feature.names[v] if v is not None else None for v in values]
+
+        # check for list of dict before Sequence, which could contain array data
+        is_list_of_dict = isinstance(feature, (datasets.Sequence, datasets.LargeList)) and isinstance(
+            feature.feature, dict
+        )
+        if is_list_of_dict:
+            return column.to_pylist()
+
+        # array data represented as a (possibly nested) sequence of numerical data: convert to numpy arrays
+        if self._is_sequence_of_numerical(feature):
+            arr = column.to_numpy(zero_copy_only=False)
+            result: list = []
+            for i in range(len(column)):
+                val = arr[i]
+                assert not isinstance(val, dict)  # we dealt with list of dicts earlier
+                # convert object array of arrays (e.g., multi-channel audio) to proper ndarray
+                if (
+                    isinstance(val, np.ndarray)
+                    and val.dtype == object
+                    and len(val) > 0
+                    and isinstance(val[0], np.ndarray)
+                ):
+                    val = np.stack(list(val))
+                result.append(val)
+            return result
+
+        if isinstance(feature, (datasets.Audio, datasets.Image)):
+            # Audio/Image is stored in Arrow as struct<bytes: binary, path: string>
+
+            from pixeltable.utils.local_store import TempStore
+
+            arrow_type = column.type
+            if not pa.types.is_struct(arrow_type):
+                raise pxt.RequestError(
+                    pxt.ErrorCode.UNSUPPORTED_OPERATION, f'Expected struct type for Audio column, got {arrow_type}'
+                )
+            field_names = {field.name for field in arrow_type}
+            if 'bytes' not in field_names or 'path' not in field_names:
+                raise pxt.RequestError(
+                    pxt.ErrorCode.MISSING_REQUIRED,
+                    f"Audio struct missing required fields 'bytes' and/or 'path', has: {field_names}",
+                )
+
+            bytes_column = pc.struct_field(column, 'bytes')
+            path_column = pc.struct_field(column, 'path')
+
+            bytes_list = bytes_column.to_pylist()
+            path_list = path_column.to_pylist()
+
+            result = []
+            for bytes, path in zip(bytes_list, path_list):
+                if bytes is None:
+                    result.append(None)
+                    continue
+                # we want to preserve the extension from the original path
+                ext = Path(path).suffix if path is not None else None
+                temp_path = TempStore.create_path(extension=ext)
+                temp_path.write_bytes(bytes)
+                result.append(str(temp_path))
+            return result
+
+        if isinstance(feature, dict):
+            return self._convert_struct_column(column, feature)
+
+        if isinstance(feature, list):
+            return column.to_pylist()
+
+        # Array<N>D: multi-dimensional fixed-shape arrays
+        if isinstance(feature, (datasets.Array2D, datasets.Array3D, datasets.Array4D, datasets.Array5D)):
+            return self._convert_array_feature(column, feature.shape)
+
+        return column.to_pylist()
+
+    def _is_sequence_of_numerical(self, feature: object) -> bool:
+        """Returns True if feature is a (nested) Sequence of numerical values."""
+        import datasets
+
+        if not isinstance(feature, datasets.Sequence):
+            return False
+        if isinstance(feature.feature, datasets.Sequence):
+            return self._is_sequence_of_numerical(feature.feature)
+
+        pa_type = feature.feature.pa_type
+        return pa_type is not None and (pat.is_integer(pa_type) or pat.is_floating(pa_type))
+
+    def _convert_struct_column(self, column: 'pa.ChunkedArray', feature: dict[str, object]) -> list[dict[str, Any]]:
+        """
+        Convert a StructArray column to a list of dicts by recursively
+        converting each field.
+        """
+
+        results: list[dict[str, Any]] = [{} for _ in range(len(column))]
+        for field_name, field_feature in feature.items():
+            field_column = pc.struct_field(column, field_name)
+            field_values = self._convert_column(field_column, field_feature)
+
+            for i, val in enumerate(field_values):
+                results[i][field_name] = val
+
+        return results
+
+    def _convert_array_feature(self, column: 'pa.ChunkedArray', shape: tuple[int, ...]) -> list[np.ndarray]:
+        arr = column.combine_chunks()
+        assert isinstance(arr, pa.ExtensionArray)
+
+        # an Array<N>D feature is stored in Arrow as a list<list<...<dtype>>>; we want to peel off the outer lists
+        # to get to contiguous storage and then reshape that
+        vals = arr.storage.values
+        while hasattr(vals, 'values'):
+            assert vals.offset == 0
+            vals = vals.values
+        flat_arr = vals.to_numpy()
+        chunk_shape = (len(column), *shape)
+        reshaped = flat_arr.reshape(chunk_shape)
+
+        # Return as list of array views (shares memory with reshaped)
+        return list(reshaped)
+
+    def valid_row_batch(self) -> Iterator['RowData']:
+        import datasets
+
+        for split_name, split_dataset in self.dataset_dict.items():
+            features = split_dataset.features
+            if isinstance(split_dataset, datasets.Dataset):
+                table = split_dataset.data  # the underlying Arrow table
+                yield from self._process_arrow_table(table, split_name, features)
+            else:
+                # we're getting batches of Arrow tables, since we did set_format('arrow');
+                # use a trial batch to determine the target batch size
+                first_batch = next(split_dataset.iter(batch_size=16))
+                bytes_per_row = int(first_batch.nbytes / len(first_batch))
+                batch_size = self._K_BATCH_SIZE_BYTES // bytes_per_row
+                yield from self._process_arrow_table(first_batch, split_name, features)
+                for batch in split_dataset.skip(16).iter(batch_size=batch_size):
+                    yield from self._process_arrow_table(batch, split_name, features)
+
+    def _process_arrow_table(self, table: 'pa.Table', split_name: str, features: dict[str, Any]) -> Iterator[RowData]:
+        # get chunk boundaries from first column's ChunkedArray
+        first_column = table.column(0)
+        offset = 0
+        for chunk in first_column.chunks:
+            chunk_size = len(chunk)
+            # zero-copy slice using existing chunk boundaries
+            batch = table.slice(offset, chunk_size)
+
+            # we assemble per-row dicts by from lists of per-column values
+            rows: list[dict[str, Any]] = [{} for _ in range(chunk_size)]
+            if self.column_name_for_split is not None:
+                for row in rows:
+                    row[self.column_name_for_split] = split_name
+
+            for col_idx, col_name in enumerate(batch.schema.names):
+                feature = features[col_name]
+                mapped_col_name = self.source_column_map.get(col_name, col_name)
+                column = batch.column(col_idx)
+                values = self._convert_column(column, feature)
+                for i, val in enumerate(values):
+                    rows[i][mapped_col_name] = val
+
+            offset += chunk_size
+            yield rows
+
+
+class ParquetTableDataConduit(TableDataConduit):
+    pq_ds: ParquetDataset | None = None
+
+    @classmethod
+    def from_tds(cls, tds: TableDataConduit) -> 'ParquetTableDataConduit':
+        tds_fields = {f.name for f in fields(tds)}
+        kwargs = {k: v for k, v in tds.__dict__.items() if k in tds_fields}
+        t = cls(**kwargs)
+
+        assert isinstance(tds.source, str)
+        input_path = fetch_url(tds.source, allow_local_file=True)
+        t.pq_ds = pa.parquet.ParquetDataset(str(input_path))
+        return t
+
+    def infer_schema_part1(self) -> tuple[dict[str, ts.ColumnType], list[str]]:
+        from pixeltable.utils.arrow import to_pxt_schema
+
+        if self.source_column_map is None:
+            if self.src_schema_overrides is None:
+                self.src_schema_overrides = {}
+            self.src_schema = to_pxt_schema(self.pq_ds.schema, self.src_schema_overrides, self.src_pk)
+            inferred_schema, inferred_pk, self.source_column_map = normalize_schema_names(
+                self.src_schema, self.src_pk, self.src_schema_overrides
+            )
+            return inferred_schema, inferred_pk
+        else:
+            raise NotImplementedError()
+
+    def infer_schema(self) -> dict[str, ts.ColumnType]:
+        self.pxt_schema, self.pxt_pk = self.infer_schema_part1()
+        self.normalize_pxt_schema_types()
+        self.prepare_insert()
+        return self.pxt_schema
+
+    def prepare_for_insert_into_table(self) -> None:
+        _, inferred_pk = self.infer_schema_part1()
+        assert len(inferred_pk) == 0
+        self.prepare_insert()
+
+    def prepare_insert(self) -> None:
+        if self.source_column_map is None:
+            self.source_column_map = {}
+        self.check_source_columns_are_insertable(self.pq_ds.schema.names)
+        self.total_rows = 0
+
+    def valid_row_batch(self) -> Iterator[RowData]:
+        from pixeltable.utils.arrow import iter_tuples2
+
+        try:
+            for fragment in self.pq_ds.fragments:
+                for batch in fragment.to_batches():
+                    dict_batch = list(iter_tuples2(batch, self.source_column_map, self.pxt_schema))
+                    self.total_rows += len(dict_batch)
+                    yield dict_batch
+        except Exception as e:
+            _logger.error(f'Error after inserting {self.total_rows} rows from Parquet file into table: {e}')
+            raise e
+
+
+@dataclass
+class PydanticTableDataConduit(TableDataConduit):
+    pxt_rows: list[dict[str, Any]] = field(default_factory=list)
+
+    def prepare_for_insert_into_table(self) -> None:
+        """Validates and converts the Pydantic models to dicts that can be inserted into the table"""
+        rows = cast(Sequence[pydantic.BaseModel], self.source)
+        assert len(rows) > 0, 'No rows to insert'
+        assert len(self.pxt_rows) == 0, 'prepare_for_insert_into_table should only be called once'
+        model_class = type(rows[0])
+        self._validate_pydantic_model(model_class)
+        sorted_reqd_cols = sorted(self.reqd_col_names)
+        # convert rows one-by-one in order to be able to print meaningful error messages
+        for i, row in enumerate(rows):
+            if type(row) is not model_class:
+                raise excs.RequestError(
+                    excs.ErrorCode.TYPE_MISMATCH,
+                    f'Expected an instance of `{model_class.__name__}`; got `{type(row).__name__}` (in row {i})',
+                )
+            try:
+                # mode='python' (the default) keeps datetimes/dates as native objects and renders nested models
+                # as dicts, so that coercing each cell below yields the same values as the equivalent dict input
+                # (e.g. naive timestamps get localized to the session time zone, rather than left as ISO strings).
+                raw_row = row.model_dump()
+            except pydantic_core.PydanticSerializationError as e:
+                raise excs.RequestError(
+                    excs.ErrorCode.UNSUPPORTED_OPERATION, f'Row {i}: error serializing pydantic model:\n{e}'
+                ) from e
+            # explicitly check that all required columns are present and non-None in the rows,
+            # because we ignore nullability when validating the pydantic model
+            for col_name in sorted_reqd_cols:
+                if raw_row.get(col_name) is None:
+                    raise excs.RequestError(
+                        excs.ErrorCode.MISSING_REQUIRED, f'Missing required column {col_name!r} in row {i}'
+                    )
+            # Coerce each cell to its column's stored representation, exactly as the dict path does
+            # (RowDataTableDataConduit._translate_row). This is what makes a pydantic model behave like the
+            # equivalent dict: timestamps localized, enums accepted only when their members are int/str values, etc.
+            assert self.pxt_schema is not None
+            pxt_row: dict[str, Any] = {}
+            for col_name, val in raw_row.items():
+                col_type = self.pxt_schema.get(col_name)
+                if col_type is None:
+                    # not a table column; leave it for downstream validation to report
+                    pxt_row[col_name] = val
+                    continue
+                try:
+                    pxt_row[col_name] = col_type.create_literal(val)
+                except TypeError as e:
+                    msg = str(e)
+                    raise excs.RequestError(
+                        excs.ErrorCode.UNSUPPORTED_OPERATION,
+                        f'Error in column {col_name!r} (row {i}): {msg[0].lower() + msg[1:]}',
+                    ) from e
+            self.pxt_rows.append(pxt_row)
+
+    def _validate_pydantic_model(self, model: type[pydantic.BaseModel]) -> None:
+        """
+        Check if a Pydantic model is compatible with the destination table for insert operations.
+
+        A model is compatible if:
+        - All required table columns have corresponding model fields with compatible types
+        - Model does not define fields for computed columns
+        - Model field types are compatible with table column types
+        """
+        assert isinstance(model, type) and issubclass(model, pydantic.BaseModel)
+
+        model_field_names = set(model.model_fields.keys())
+
+        missing_required = self.reqd_col_names - model_field_names
+        if missing_required:
+            raise excs.RequestError(
+                excs.ErrorCode.MISSING_REQUIRED,
+                f'Pydantic model `{model.__name__}` is missing required columns: '
+                + ', '.join(sorted(missing_required)),
+            )
+
+        computed_in_model = self.computed_col_names & model_field_names
+        if computed_in_model:
+            raise excs.RequestError(
+                excs.ErrorCode.UNSUPPORTED_OPERATION,
+                f'Pydantic model `{model.__name__}` has fields for computed columns: '
+                + ', '.join(sorted(computed_in_model)),
+            )
+
+        # validate type compatibility
+        assert self.pxt_schema is not None, 'add_table_info must be called first'
+        common_fields = model_field_names & set(self.pxt_schema.keys())
+        if len(common_fields) == 0:
+            raise excs.RequestError(
+                excs.ErrorCode.UNSUPPORTED_OPERATION,
+                f'Pydantic model `{model.__name__}` has no fields that map to columns in table {self.tbl_name!r}',
+            )
+        for field_name in sorted(common_fields):
+            pxt_col_type = self.pxt_schema[field_name]
+            model_type = model.model_fields[field_name].annotation
+
+            # we ignore nullability: we want to accept optional model fields for required table columns, as long as
+            # the model instances provide a non-null value
+            # infer_pydantic_json=True maps an enum field to its value type, matching how an enum member is
+            # later coerced (an int/str-valued member satisfies the corresponding scalar column)
+            inferred_pxt_type = ts.ColumnType.from_python_type(model_type, infer_pydantic_json=True)
+            if inferred_pxt_type is None:
+                raise excs.RequestError(
+                    excs.ErrorCode.INVALID_TYPE,
+                    f'Pydantic model `{model.__name__}`: cannot infer Pixeltable type for column {field_name!r}',
+                )
+
+            if pxt_col_type.is_media_type():
+                # media types require file paths, either as str or Path
+                if not inferred_pxt_type.is_string_type():
+                    raise excs.RequestError(
+                        excs.ErrorCode.UNSUPPORTED_OPERATION,
+                        f'Column {field_name!r} requires a `str` or `Path` field in `{model.__name__}`, but it is '
+                        f'`{model_type.__name__}`',
+                    )
+            else:
+                if not pxt_col_type.is_supertype_of(inferred_pxt_type, ignore_nullable=True):
+                    raise excs.RequestError(
+                        excs.ErrorCode.TYPE_MISMATCH,
+                        f'Pydantic model `{model.__name__}` has incompatible type `{model_type.__name__}` '
+                        f'for column {field_name!r} (of Pixeltable type `{pxt_col_type}`)',
+                    )
+
+                if (
+                    isinstance(model_type, type)
+                    and issubclass(model_type, pydantic.BaseModel)
+                    and not is_json_convertible(model_type)
+                ):
+                    raise excs.RequestError(
+                        excs.ErrorCode.UNSUPPORTED_OPERATION,
+                        f'Pydantic model `{model.__name__}` has field {field_name!r} with nested model '
+                        f'`{model_type.__name__}`, which is not JSON-convertible',
+                    )
+
+    def valid_row_batch(self) -> Iterator[RowData]:
+        yield self.pxt_rows

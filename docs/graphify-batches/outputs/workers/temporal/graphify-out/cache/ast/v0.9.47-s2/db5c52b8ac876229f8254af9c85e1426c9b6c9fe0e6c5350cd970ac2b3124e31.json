@@ -1,0 +1,1 @@
+{"nodes": [{"id": "$graphify-root$_schema_postgresql_v12_temporal_database_sql", "label": "database.sql", "file_type": "code", "source_file": "schema/postgresql/v12/temporal/database.sql", "source_location": null}], "edges": []}

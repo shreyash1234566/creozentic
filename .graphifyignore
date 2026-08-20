@@ -1,0 +1,41 @@
+# Repository metadata and dependency trees
+.git/
+**/.git/
+node_modules/
+**/node_modules/
+.venv/
+**/.venv/
+__pycache__/
+**/__pycache__/
+
+# Build and generated artifacts
+.next/
+**/.next/
+dist/
+**/dist/
+build/
+**/build/
+coverage/
+**/coverage/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Graphify outputs and temporary fixtures
+docs/graphify-audit/
+graphify-out/
+**/graphify-out/
+/tmp/
+
+# Large binary media/model artifacts
+*.mp4
+*.mov
+*.mkv
+*.webm
+*.wav
+*.mp3
+*.onnx
+*.safetensors
+*.ckpt
+*.pt
+*.pth

@@ -1,0 +1,440 @@
+import re
+import textwrap
+import unicodedata
+from typing import Callable
+
+import pytest
+
+import pixeltable as pxt
+from pixeltable import exprs
+from pixeltable.functions.string import (
+    capitalize,
+    casefold,
+    center,
+    count,
+    endswith,
+    find,
+    format,
+    isalnum,
+    isalpha,
+    isascii,
+    isdecimal,
+    isdigit,
+    isidentifier,
+    islower,
+    isnumeric,
+    isspace,
+    istitle,
+    isupper,
+    ljust,
+    lower,
+    lstrip,
+    reverse,
+    rfind,
+    rjust,
+    rsplit,
+    rstrip,
+    split,
+    splitlines,
+    startswith,
+    string_splitter,
+    strip,
+    swapcase,
+    title,
+    upper,
+    zfill,
+)
+
+from ..utils import pxt_raises, reload_catalog, skip_test_if_not_installed, validate_update_status
+
+pytestmark = pytest.mark.local('UDF/integration test')
+
+
+@pxt.udf
+def noop_str(s: str) -> str:
+    """Identity UDF with no SQL translation; forces Python-path execution."""
+    return s
+
+
+class TestString:
+    TEST_STR = """
+        The concept of relational database was defined by E. F. Codd at IBM in 1970. Codd introduced the term
+        relational in his research paper "A Relational Model of Data for Large Shared Data Banks". In this paper
+        and later papers, he defined what he meant by relation. One well-known definition of what constitutes a
+        relational database system is composed of Codd's 12 rules. However, no commercial implementations of the
+        relational model conform to all of Codd's rules, so the term has gradually come to describe a broader class
+        of database systems, which at a minimum: Present the data to the user as relations (a presentation in tabular
+        form, i.e. as a collection of tables with each table consisting of a set of rows and columns);
+        Provide relational operators to manipulate the data in tabular form.
+        In 1974, IBM began developing System R, a research project to develop a prototype RDBMS. The first system sold
+        as an RDBMS was Multics Relational Data Store (June 1976). Oracle was released in 1979 by Relational Software,
+        now Oracle Corporation. Ingres and IBM BS12 followed. Other examples of an RDBMS include IBM Db2, SAP Sybase
+        ASE, and Informix. In 1984, the first RDBMS for Macintosh began being developed, code-named Silver Surfer,
+        and was released in 1987 as 4th Dimension and known today as 4D.
+        The first systems that were relatively faithful implementations of the relational model were from:
+        University of Michigan - Micro DBMS (1969)
+        Massachusetts Institute of Technology (1971)]
+        IBM UK Scientific Centre at Peterlee - IS1 (1970-72), and its successor, PRTV (1973-79).
+        """
+
+    TEST_STRS = sorted(
+        [
+            *textwrap.dedent(TEST_STR.strip()).split('. '),
+            '   \v\t\rWhite\n\nSpace\n\f \n\n',
+            r'%%!!#__\\Symbols%%!!#\\@@__%',
+            'a',
+            ' ',
+            '',
+        ]
+    )
+
+    def test_all(self, uses_db: None) -> None:
+        t = pxt.create_table('test_tbl', {'s': pxt.String | None})
+        validate_update_status(t.insert({'s': s} for s in self.TEST_STRS), expected_rows=len(self.TEST_STRS))
+
+        test_params: list[tuple[pxt.Function, Callable, list, dict]] = [
+            # (pxt_fn, str_fn, args, **kwargs)
+            (capitalize, str.capitalize, [], {}),
+            (casefold, str.casefold, [], {}),
+            (center, str.center, [100], {}),
+            (count, str.count, ['relation'], {}),
+            (endswith, str.endswith, ['1970.'], {}),
+            (endswith, str.endswith, ['%'], {}),
+            (endswith, str.endswith, ['_'], {}),
+            (endswith, str.endswith, [r's%%!!#\\@@__%'], {}),
+            (find, str.find, ['relation', 10, -10], {}),
+            (isalnum, str.isalnum, [], {}),
+            (isalpha, str.isalpha, [], {}),
+            (isascii, str.isascii, [], {}),
+            (isdecimal, str.isdecimal, [], {}),
+            (isdigit, str.isdigit, [], {}),
+            (isidentifier, str.isidentifier, [], {}),
+            (islower, str.islower, [], {}),
+            (isnumeric, str.isnumeric, [], {}),
+            (isupper, str.isupper, [], {}),
+            (istitle, str.istitle, [], {}),
+            (isspace, str.isspace, [], {}),
+            (pxt.functions.string.len, str.__len__, [], {}),
+            (ljust, str.ljust, [100], {}),
+            (lower, str.lower, [], {}),
+            (lstrip, str.lstrip, [], {}),
+            (lstrip, str.lstrip, ['ST'], {}),
+            (reverse, lambda s: s[::-1], [], {}),
+            (rfind, str.rfind, ['relation', 10, -10], {}),
+            (rjust, str.rjust, [100], {}),
+            (rsplit, str.rsplit, [], {}),
+            (rsplit, str.rsplit, ['e', 2], {}),
+            (rstrip, str.rstrip, [], {}),
+            (rstrip, str.rstrip, ['ST'], {}),
+            (split, str.split, [], {}),
+            (split, str.split, ['e', 2], {}),
+            (splitlines, str.splitlines, [], {}),
+            (splitlines, str.splitlines, [True], {}),
+            (startswith, str.startswith, ['Codd'], {}),
+            (strip, str.strip, [], {}),
+            (strip, str.strip, ['ST'], {}),
+            (swapcase, str.swapcase, [], {}),
+            (title, str.title, [], {}),
+            (upper, str.upper, [], {}),
+            (zfill, str.zfill, [100], {}),
+        ]
+
+        for pxt_fn, str_fn, args, kwargs in test_params:
+            try:
+                actual = t.order_by(t.s).select(out=pxt_fn(t.s, *args, **kwargs)).collect()['out']
+                expected = [str_fn(s, *args, **kwargs) for s in self.TEST_STRS]
+                assert actual == expected, pxt_fn
+                # Run the same query, forcing the calculations to be done in Python (not SQL)
+                # by interposing a non-SQLizable identity function
+                actual_py = (
+                    t.order_by(t.s)
+                    .select(out=pxt_fn(t.s.apply(lambda x: x, col_type=pxt.String), *args, **kwargs))
+                    .collect()['out']
+                )
+                assert actual_py == expected, pxt_fn
+            except Exception as e:
+                print(pxt_fn)
+                raise e
+
+        # Check that they can all be called with method syntax too
+        for pxt_fn, _, _, _ in test_params:
+            mref = getattr(t.s, pxt_fn.name)
+            assert isinstance(mref, exprs.MethodRef)
+            assert mref.method_name == pxt_fn.name, pxt_fn
+
+        # a method call executes end to end (count was formerly shadowed by a ColumnRef method)
+        actual = t.order_by(t.s).select(out=t.s.count('relation')).collect()['out']
+        assert actual == [s.count('relation') for s in self.TEST_STRS]
+
+    def test_removeprefix(self, uses_db: None) -> None:
+        t = pxt.create_table('test_tbl', {'s': pxt.String | None})
+        validate_update_status(t.insert({'s': s} for s in self.TEST_STRS), expected_rows=len(self.TEST_STRS))
+
+        # count() doesn't yet support non-SQL Where clauses
+        res = t.select(t.s, out=t.s.removeprefix('Codd')).collect()
+        for row in res:
+            if row['s'].startswith('Codd'):
+                assert row['out'] == row['s'][4:]
+            else:
+                assert row['out'] == row['s']
+
+    def test_removesuffix(self, uses_db: None) -> None:
+        t = pxt.create_table('test_tbl', {'s': pxt.String | None})
+        validate_update_status(t.insert({'s': s} for s in self.TEST_STRS), expected_rows=len(self.TEST_STRS))
+
+        # count() doesn't yet support non-SQL Where clauses
+        res = t.select(t.s, out=t.s.removesuffix('1970')).collect()
+        for row in res:
+            if row['s'].endswith('1970'):
+                assert row['out'] == row['s'][:-4]
+            else:
+                assert row['out'] == row['s']
+
+    def test_replace(self, uses_db: None) -> None:
+        t = pxt.create_table('test_tbl', {'s': pxt.String | None})
+        validate_update_status(t.insert({'s': s} for s in self.TEST_STRS), expected_rows=len(self.TEST_STRS))
+
+        # count() doesn't yet support non-SQL Where clauses
+        n = len(t.where(t.s.contains('Codd')).collect())
+        t.add_computed_column(s2=t.s.replace('Codd', 'Mohan'))
+        m = len(t.where(t.s2.contains('Mohan')).collect())
+        assert n == m
+
+        t.add_computed_column(s3=t.s.replace_re('C.dd', 'Mohan'))
+        o = len(t.where(t.s3.contains('Mohan')).collect())
+        assert n == o
+
+    def test_slice_replace(self, uses_db: None) -> None:
+        t = pxt.create_table('test_tbl', {'s': pxt.String | None})
+        validate_update_status(t.insert({'s': s} for s in self.TEST_STRS), expected_rows=len(self.TEST_STRS))
+
+        # count() doesn't yet support non-SQL Where clauses
+        res = t.select(t.s, out=t.s.slice_replace(50, 51, 'abc')).collect()
+        for row in res:
+            assert row['out'] == row['s'][:50] + 'abc' + row['s'][51:]
+
+    def test_partition(self, uses_db: None) -> None:
+        t = pxt.create_table('test_tbl', {'s': pxt.String | None})
+        validate_update_status(t.insert({'s': s} for s in self.TEST_STRS), expected_rows=len(self.TEST_STRS))
+
+        # count() doesn't yet support non-SQL Where clauses
+        status = t.add_computed_column(parts=t.s.partition('IBM'))
+        assert status.num_excs == 0
+        res = t.where(t.s.contains('IBM')).select(t.s, t.parts).collect()
+        for row in res:
+            assert len(row['parts']) == 3
+            assert len(row['parts'][0]) == row['s'].find('IBM')
+            assert row['parts'][1] == 'IBM'
+
+    def test_rpartition(self, uses_db: None) -> None:
+        t = pxt.create_table('test_tbl', {'s': pxt.String | None})
+        validate_update_status(t.insert({'s': s} for s in self.TEST_STRS), expected_rows=len(self.TEST_STRS))
+
+        # count() doesn't yet support non-SQL Where clauses
+        status = t.add_computed_column(parts=t.s.rpartition('IBM'))
+        assert status.num_excs == 0
+        res = t.where(t.s.contains('IBM')).select(t.s, t.parts).collect()
+        for row in res:
+            assert len(row['parts']) == 3
+            assert len(row['parts'][0]) == row['s'].rfind('IBM')
+            assert row['parts'][1] == 'IBM'
+
+    def test_wrap(self, uses_db: None) -> None:
+        t = pxt.create_table('test_tbl', {'s': pxt.String | None})
+        validate_update_status(t.insert({'s': s} for s in self.TEST_STRS), expected_rows=len(self.TEST_STRS))
+
+        res = t.select(t.s, out=t.s.fill(5)).collect()
+        for row in res:
+            assert row['out'] == textwrap.fill(row['s'], 5)
+        res = t.select(t.s, out=t.s.wrap(5)).collect()
+        for row in res:
+            assert row['out'] == textwrap.wrap(row['s'], 5)
+
+    def test_slice(self, uses_db: None) -> None:
+        t = pxt.create_table('test_tbl', {'s': pxt.String | None})
+        validate_update_status(t.insert({'s': s} for s in self.TEST_STRS), expected_rows=len(self.TEST_STRS))
+        res = t.select(t.s, out=t.s.slice(0, 4)).collect()
+        for row in res:
+            assert row['out'] == row['s'][0:4]
+
+    def test_match(self, uses_db: None) -> None:
+        t = pxt.create_table('test_tbl', {'s': pxt.String | None})
+        validate_update_status(t.insert({'s': s} for s in self.TEST_STRS), expected_rows=len(self.TEST_STRS))
+
+        # count() doesn't yet support non-SQL Where clauses
+        assert len(t.where(t.s.match('Codd')).collect()) == 2
+        assert len(t.where(t.s.match('codd', case=False)).collect()) == 2
+
+    def test_fullmatch(self, uses_db: None) -> None:
+        t = pxt.create_table('test_tbl', {'s': pxt.String | None})
+        validate_update_status(t.insert({'s': s} for s in self.TEST_STRS), expected_rows=len(self.TEST_STRS))
+
+        # count() doesn't yet support non-SQL Where clauses
+        assert len(t.where(t.s.fullmatch('F')).collect()) == 1
+        assert len(t.where(t.s.fullmatch('f', case=False)).collect()) == 1
+
+    def test_pad(self, uses_db: None) -> None:
+        t = pxt.create_table('test_tbl', {'s': pxt.String | None})
+        validate_update_status(t.insert({'s': s} for s in self.TEST_STRS), expected_rows=len(self.TEST_STRS))
+        res = t.select(t.s, out=t.s.pad(width=100, side='both')).collect()
+        for row in res:
+            assert row['out'] == row['s'].center(100)
+
+    def test_normalize(self, uses_db: None) -> None:
+        t = pxt.create_table('test_tbl', {'s': pxt.String | None})
+        validate_update_status(t.insert({'s': s} for s in self.TEST_STRS), expected_rows=len(self.TEST_STRS))
+
+        res = t.select(t.s, out=t.s.normalize('NFC')).collect()
+        for row in res:
+            assert row['out'] == unicodedata.normalize('NFC', row['s'])
+
+    def test_repeat(self, uses_db: None) -> None:
+        t = pxt.create_table('test_tbl', {'s': pxt.String | None, 'n': pxt.Int | None})
+        strs = ['a', 'b', 'c', 'd', 'e']
+        validate_update_status(t.insert({'s': s, 'n': n} for n, s in enumerate(strs)), expected_rows=len(strs))
+        res = t.select(t.s, t.n, out=t.s.repeat(t.n)).collect()
+        for row in res:
+            assert row['out'] == row['s'] * row['n']
+
+    def test_contains(self, uses_db: None) -> None:
+        t = pxt.create_table('test_tbl', {'s': pxt.String | None})
+        validate_update_status(t.insert({'s': s} for s in self.TEST_STRS), expected_rows=len(self.TEST_STRS))
+
+        assert t.order_by(t.s).select(out=t.s.contains('IBM')).collect()['out'] == ['IBM' in s for s in self.TEST_STRS]
+        assert t.order_by(t.s).select(out=t.s.contains('ibm', case=True)).collect()['out'] == [
+            'ibm' in s for s in self.TEST_STRS
+        ]
+        assert t.order_by(t.s).select(out=t.s.contains('ibm', case=False)).collect()['out'] == [
+            'ibm' in s.lower() for s in self.TEST_STRS
+        ]
+
+        assert t.order_by(t.s).select(out=t.s.contains_re('ibm', flags=re.IGNORECASE)).collect()['out'] == [
+            'ibm' in s.lower() for s in self.TEST_STRS
+        ]
+        assert t.order_by(t.s).select(out=t.s.contains_re('i.m', flags=re.IGNORECASE)).collect()['out'] >= [
+            'ibm' in s.lower() for s in self.TEST_STRS
+        ]
+
+    def test_index(self, uses_db: None) -> None:
+        t = pxt.create_table('test_tbl', {'s': pxt.String | None})
+        validate_update_status(t.insert({'s': s} for s in self.TEST_STRS), expected_rows=len(self.TEST_STRS))
+
+        with pxt_raises(pxt.ErrorCode.UNSUPPORTED_OPERATION) as exc_info:
+            _ = t.select(t.s.index('IBM')).collect()
+        assert 'ValueError' in str(exc_info.value)
+
+        with pxt_raises(pxt.ErrorCode.UNSUPPORTED_OPERATION) as exc_info:
+            _ = t.select(t.s.rindex('IBM')).collect()
+        assert 'ValueError' in str(exc_info.value)
+
+        res = t.where(t.s.contains('IBM')).select(t.s, idx=t.s.index('IBM')).collect()
+        for s, idx in zip(res['s'], res['idx']):
+            assert s[idx : idx + 3] == 'IBM'
+
+        res = t.where(t.s.contains('IBM')).select(t.s, idx=t.s.rindex('IBM')).collect()
+        for s, idx in zip(res['s'], res['idx']):
+            assert s[idx : idx + 3] == 'IBM'
+
+    def test_format(self, uses_db: None) -> None:
+        t = pxt.create_table('test_tbl', {'input': pxt.String | None})
+
+        t.add_computed_column(s1=format('ABC {0}', t.input, t.input))
+        t.add_computed_column(s2=format('DEF {this}', this=t.input))
+        t.add_computed_column(s3=format('GHI {0} JKL {this}', t.input, this=t.input))
+        status = t.insert(input='MNO')
+        assert status.num_rows == 1
+        assert status.num_excs == 0
+        row = t.head()[0]
+        assert row == {'input': 'MNO', 's1': 'ABC MNO', 's2': 'DEF MNO', 's3': 'GHI MNO JKL MNO'}
+
+        reload_catalog()
+        t = pxt.get_table('test_tbl')
+        status = t.insert(input='PQR')
+        assert status.num_rows == 1
+        assert status.num_excs == 0
+        row = t.head()[1]
+        assert row == {'input': 'PQR', 's1': 'ABC PQR', 's2': 'DEF PQR', 's3': 'GHI PQR JKL PQR'}
+
+    def test_string_splitter(self, uses_db: None) -> None:
+        skip_test_if_not_installed('spacy')
+        t = pxt.create_table('test_tbl', {'s': pxt.String | None})
+        validate_update_status(t.insert([{'s': self.TEST_STR}]), expected_rows=1)
+        v = pxt.create_view('test_view', t, iterator=string_splitter(t.s, 'sentence'))
+        results = v.select(v.text).collect()
+        # Verify we got multiple sentences from the TEST_STR
+        assert len(results) > 1
+        # Verify each result has a 'text' field that is a non-empty string
+        for row in results:
+            assert isinstance(row['text'], str)
+            assert len(row['text']) > 0
+
+    UNICODE_STRS = ('café', 'ñoño', 'ÀÉÎÕÜ')
+
+    def test_unicode_case(self, uses_db: None) -> None:
+        """`upper`/`lower`/`capitalize` produce identical, correct results on SQL and Python paths
+        for non-ASCII input.
+        """
+        t = pxt.create_table('test_tbl', {'idx': pxt.Int | None, 's': pxt.String | None})
+        validate_update_status(
+            t.insert({'idx': i, 's': s} for i, s in enumerate(self.UNICODE_STRS)), expected_rows=len(self.UNICODE_STRS)
+        )
+
+        test_params: list[tuple[pxt.Function, Callable]] = [
+            (upper, str.upper),
+            (lower, str.lower),
+            (capitalize, str.capitalize),
+        ]
+        for pxt_fn, str_fn in test_params:
+            sql_actual = t.order_by(t.idx).select(out=pxt_fn(t.s)).collect()['out']
+            py_actual = t.order_by(t.idx).select(out=pxt_fn(noop_str(t.s))).collect()['out']
+            py_expected = [str_fn(s) for s in self.UNICODE_STRS]
+
+            assert py_actual == py_expected, pxt_fn
+            assert sql_actual == py_expected, pxt_fn
+            assert sql_actual == py_actual, pxt_fn
+
+    def test_unicode_contains_and_filter(self, uses_db: None) -> None:
+        """Case-insensitive `contains` and `where(upper(...) == ...)` produce identical, correct
+        results on SQL and Python paths for non-ASCII input.
+        """
+        t = pxt.create_table('test_tbl', {'idx': pxt.Int | None, 's': pxt.String | None})
+        validate_update_status(
+            t.insert({'idx': i, 's': s} for i, s in enumerate(self.UNICODE_STRS)), expected_rows=len(self.UNICODE_STRS)
+        )
+
+        needle = 'CAFÉ'
+        sql_actual = t.order_by(t.idx).select(out=t.s.contains(needle, case=False)).collect()['out']
+        py_actual = t.order_by(t.idx).select(out=noop_str(t.s).contains(needle, case=False)).collect()['out']
+        py_expected = [needle.lower() in s.lower() for s in self.UNICODE_STRS]
+
+        assert py_actual == py_expected
+        assert sql_actual == py_expected
+        assert sql_actual == py_actual
+
+        needle_upper = 'CAFÉ'
+        sql_hits = sorted(t.where(upper(t.s) == needle_upper).select(t.s).collect()['s'])
+        py_hits = sorted(t.where(upper(noop_str(t.s)) == needle_upper).select(t.s).collect()['s'])
+        py_hits_expected = sorted(s for s in self.UNICODE_STRS if s.upper() == needle_upper)
+
+        assert py_hits == py_hits_expected
+        assert sql_hits == py_hits_expected
+        assert sql_hits == py_hits
+
+    def test_computed_column_vs_live_select_unicode(self, uses_db: None) -> None:
+        """Insert-time computed-column materialization (Python) and live `select upper(t.s)` (SQL)
+        produce identical results on non-ASCII input, so `where(upper(t.s) == t.upper_s)` is a tautology.
+        """
+        t = pxt.create_table('test_tbl', {'s': pxt.String | None})
+        t.add_computed_column(upper_s=upper(t.s))
+        s = 'café'
+        validate_update_status(t.insert([{'s': s}]), expected_rows=1)
+
+        stored = t.select(t.upper_s).collect()['upper_s'][0]
+        live = t.select(out=upper(t.s)).collect()['out'][0]
+
+        assert stored == s.upper()
+        assert live == s.upper()
+        assert stored == live
+
+        tautology_hits = list(t.where(upper(t.s) == t.upper_s).select(t.s).collect()['s'])
+        assert tautology_hits == [s]

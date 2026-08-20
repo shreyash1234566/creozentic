@@ -1,0 +1,1748 @@
+{
+  "root": "/home/ubuntu/creozentic/third_party",
+  "repositories": [
+    {
+      "repo": "ai-broll",
+      "bytes": 111376505,
+      "files": 34,
+      "human_bytes": "0.10 GiB",
+      "categories": {
+        "source_and_other": 55916502,
+        "cache_or_history": 55460003
+      },
+      "model_candidates": [],
+      "largest_files": [
+        {
+          "path": ".git/objects/pack/pack-ce7075faf1d35bd1c12ba99a5175c6c4fa5a382c.pack",
+          "bytes": 55430844,
+          "human_bytes": "0.05 GiB"
+        },
+        {
+          "path": "final_video_with_broll.mp4",
+          "bytes": 33407089,
+          "human_bytes": "0.03 GiB"
+        },
+        {
+          "path": "video.mp4",
+          "bytes": 22490104,
+          "human_bytes": "0.02 GiB"
+        },
+        {
+          "path": "AI_Broll.ipynb",
+          "bytes": 15472,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": ".git/hooks/pre-rebase.sample",
+          "bytes": 4898,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": ".git/hooks/fsmonitor-watchman.sample",
+          "bytes": 4726,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": ".git/hooks/update.sample",
+          "bytes": 3650,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": ".git/hooks/push-to-checkout.sample",
+          "bytes": 2783,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "README.md",
+          "bytes": 2755,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": ".git/hooks/sendemail-validate.sample",
+          "bytes": 2308,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": ".git/hooks/pre-commit.sample",
+          "bytes": 1643,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": ".git/hooks/prepare-commit-msg.sample",
+          "bytes": 1492,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": ".git/hooks/pre-push.sample",
+          "bytes": 1374,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": ".git/objects/pack/pack-ce7075faf1d35bd1c12ba99a5175c6c4fa5a382c.idx",
+          "bytes": 1268,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "LICENSE",
+          "bytes": 1082,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": ".git/hooks/commit-msg.sample",
+          "bytes": 896,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": ".git/hooks/pre-receive.sample",
+          "bytes": 544,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": ".git/hooks/applypatch-msg.sample",
+          "bytes": 478,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": ".git/index",
+          "bytes": 457,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": ".git/hooks/pre-applypatch.sample",
+          "bytes": 424,
+          "human_bytes": "0.00 GiB"
+        }
+      ]
+    },
+    {
+      "repo": "ave",
+      "bytes": 2020464,
+      "files": 134,
+      "human_bytes": "0.00 GiB",
+      "categories": {
+        "source_and_other": 1502272,
+        "cache_or_history": 516664,
+        "model_or_model_named": 1528
+      },
+      "model_candidates": [],
+      "largest_files": [
+        {
+          "path": "uv.lock",
+          "bytes": 593887,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": ".git/objects/pack/pack-88055cef3115a235311b64c141db2bd07b04db3f.pack",
+          "bytes": 473010,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "src/web/static/index.html",
+          "bytes": 79835,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "src/web/jobs.py",
+          "bytes": 46214,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "src/web/studio/pnpm-lock.yaml",
+          "bytes": 45730,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "src/web/static/js/re-render.js",
+          "bytes": 42658,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "src/web/static/js/chat.js",
+          "bytes": 41916,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "src/agents/editor.py",
+          "bytes": 38990,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "src/pipeline/runner.py",
+          "bytes": 34080,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "src/web/static/js/edit-controls.js",
+          "bytes": 28703,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "src/web/studio/src/app/favicon.ico",
+          "bytes": 25931,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "tests/test_web_render.py",
+          "bytes": 24722,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "src/tools/analyze.py",
+          "bytes": 23570,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "src/agents/director.py",
+          "bytes": 23417,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "tests/test_web_feedback.py",
+          "bytes": 22811,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "src/web/static/js/progress.js",
+          "bytes": 22566,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "tests/test_web_clips.py",
+          "bytes": 19563,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "src/web/static/js/review-chart.js",
+          "bytes": 18305,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "src/web/routes/jobs.py",
+          "bytes": 17347,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "tests/test_web_ws.py",
+          "bytes": 16782,
+          "human_bytes": "0.00 GiB"
+        }
+      ]
+    },
+    {
+      "repo": "comfyui",
+      "bytes": 56322730,
+      "files": 1060,
+      "human_bytes": "0.05 GiB",
+      "categories": {
+        "source_and_other": 41577326,
+        "model_or_model_named": 2218578,
+        "cache_or_history": 12208116,
+        "data_or_assets": 318710
+      },
+      "model_candidates": [],
+      "largest_files": [
+        {
+          "path": ".git/objects/pack/pack-47b03514df2aa143eb78c2997c5c4df728fd813c.pack",
+          "bytes": 12004545,
+          "human_bytes": "0.01 GiB"
+        },
+        {
+          "path": "comfy/text_encoders/llama_tokenizer/tokenizer.json",
+          "bytes": 9085835,
+          "human_bytes": "0.01 GiB"
+        },
+        {
+          "path": "comfy/text_encoders/qwen35_tokenizer/vocab.json",
+          "bytes": 6722759,
+          "human_bytes": "0.01 GiB"
+        },
+        {
+          "path": "comfy/text_encoders/qwen35_tokenizer/merges.txt",
+          "bytes": 3353259,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "comfy/text_encoders/qwen25_tokenizer/vocab.json",
+          "bytes": 2776833,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "comfy/text_encoders/t5_tokenizer/tokenizer.json",
+          "bytes": 2424256,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "comfy/text_encoders/qwen25_tokenizer/merges.txt",
+          "bytes": 1671853,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "comfy/sd1_tokenizer/vocab.json",
+          "bytes": 1059962,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "comfy/sd1_tokenizer/merges.txt",
+          "bytes": 524619,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "comfy/text_encoders/t5_pile_tokenizer/tokenizer.model",
+          "bytes": 499723,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "comfy/text_encoders/ace_lyrics_tokenizer/vocab.json",
+          "bytes": 364005,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "comfy/text_encoders/hydit_clip_tokenizer/vocab.txt",
+          "bytes": 316627,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "openapi.yaml",
+          "bytes": 235494,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "comfy_api_nodes/apis/__init__.py",
+          "bytes": 213669,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "comfy_api_nodes/nodes_bytedance.py",
+          "bytes": 146834,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "comfy/sd.py",
+          "bytes": 138814,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "blueprints/Depth to Video (ltx 2.0).json",
+          "bytes": 138288,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "comfy/model_base.py",
+          "bytes": 135465,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "blueprints/Character Replacement (SCAIL-2 Extend).json",
+          "bytes": 114792,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "comfy_api_nodes/nodes_kling.py",
+          "bytes": 114504,
+          "human_bytes": "0.00 GiB"
+        }
+      ]
+    },
+    {
+      "repo": "cutscript",
+      "bytes": 464579,
+      "files": 100,
+      "human_bytes": "0.00 GiB",
+      "categories": {
+        "source_and_other": 262491,
+        "cache_or_history": 202088
+      },
+      "model_candidates": [],
+      "largest_files": [
+        {
+          "path": "frontend/package-lock.json",
+          "bytes": 94254,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": ".git/objects/pack/pack-fa691bea77e009aca6480daca63b8ceebaacbacd.pack",
+          "bytes": 82863,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "backend/services/__pycache__/video_editor.cpython-312.pyc",
+          "bytes": 13059,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "frontend/src/components/AIPanel.tsx",
+          "bytes": 12631,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "frontend/src/App.tsx",
+          "bytes": 11138,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "backend/services/__pycache__/ai_provider.cpython-312.pyc",
+          "bytes": 10148,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "backend/services/video_editor.py",
+          "bytes": 8790,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "frontend/src/components/TranscriptEditor.tsx",
+          "bytes": 7973,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "backend/services/__pycache__/transcription.cpython-312.pyc",
+          "bytes": 7611,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "frontend/src/hooks/useKeyboardShortcuts.ts",
+          "bytes": 7556,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "frontend/src/components/WaveformTimeline.tsx",
+          "bytes": 7450,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "frontend/src/components/ExportDialog.tsx",
+          "bytes": 7402,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "backend/services/__pycache__/caption_generator.cpython-312.pyc",
+          "bytes": 7402,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "backend/services/ai_provider.py",
+          "bytes": 7255,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "backend/utils/__pycache__/cache.cpython-312.pyc",
+          "bytes": 7234,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "backend/routers/__pycache__/export.cpython-312.pyc",
+          "bytes": 7219,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "backend/utils/__pycache__/gpu_utils.cpython-312.pyc",
+          "bytes": 6921,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "frontend/src/store/editorStore.ts",
+          "bytes": 6907,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "frontend/src/components/SettingsPanel.tsx",
+          "bytes": 6259,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "backend/utils/gpu_utils.py",
+          "bytes": 5817,
+          "human_bytes": "0.00 GiB"
+        }
+      ]
+    },
+    {
+      "repo": "funclip",
+      "bytes": 99623455,
+      "files": 84,
+      "human_bytes": "0.09 GiB",
+      "categories": {
+        "source_and_other": 63424900,
+        "cache_or_history": 36196036,
+        "model_or_model_named": 2519
+      },
+      "model_candidates": [],
+      "largest_files": [
+        {
+          "path": "font/STHeitiMedium.ttc",
+          "bytes": 55754164,
+          "human_bytes": "0.05 GiB"
+        },
+        {
+          "path": ".git/objects/pack/pack-f4b32f4c5f6e102bad788a877859c296a55c0413.pack",
+          "bytes": 36159844,
+          "human_bytes": "0.03 GiB"
+        },
+        {
+          "path": "docs/images/demo.png",
+          "bytes": 2136855,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "docs/images/demo_en.png",
+          "bytes": 1808534,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "docs/images/dingding.png",
+          "bytes": 1497807,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "docs/images/guide.jpg",
+          "bytes": 1299189,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "docs/images/interface.jpg",
+          "bytes": 325142,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "docs/images/LLM_guide.png",
+          "bytes": 219748,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "docs/images/wechat.png",
+          "bytes": 191225,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "funclip/videoclipper.py",
+          "bytes": 24316,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "funclip/launch.py",
+          "bytes": 22121,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "README.md",
+          "bytes": 16570,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "README_zh.md",
+          "bytes": 14182,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "funclip/utils/theme.json",
+          "bytes": 13576,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "tests/test_release_contract.py",
+          "bytes": 8108,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "tests/test_duplicate_text_matching.py",
+          "bytes": 6580,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "tests/test_litellm_api.py",
+          "bytes": 6048,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "funclip/llm/demo_prompt.py",
+          "bytes": 6002,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": ".git/index",
+          "bytes": 5500,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "funclip/utils/trans_utils.py",
+          "bytes": 5043,
+          "human_bytes": "0.00 GiB"
+        }
+      ]
+    },
+    {
+      "repo": "openchatcut",
+      "bytes": 128391516,
+      "files": 2345,
+      "human_bytes": "0.12 GiB",
+      "categories": {
+        "source_and_other": 13792811,
+        "cache_or_history": 57378633,
+        "data_or_assets": 56820012,
+        "model_or_model_named": 400060
+      },
+      "model_candidates": [],
+      "largest_files": [
+        {
+          "path": ".git/objects/pack/pack-80d48eff8f71f2b950b04739a7ac6b34aa92b82a.pack",
+          "bytes": 57022924,
+          "human_bytes": "0.05 GiB"
+        },
+        {
+          "path": "assets/fonts/qingsong-shouxieti-yi/QingsongShouxietiYi-Regular.woff2",
+          "bytes": 4307032,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "assets/fonts/qingsong-shouxieti-san-p/QingsongShouxietiSanP-Regular.woff2",
+          "bytes": 3395864,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "assets/fonts/huxiaobo-saobaoti/HuxiaoboSaobaoti-Regular.woff2",
+          "bytes": 3032776,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "assets/sound-effects/slow-dell-keyboard-typing.mp3",
+          "bytes": 2734080,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "assets/readme-pic/08-community-resources.en.png",
+          "bytes": 2681589,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "assets/readme-pic/07-lut.png",
+          "bytes": 2424699,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "assets/sound-effects/light-clock-tick.mp3",
+          "bytes": 2012160,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "assets/readme-pic/03-agent-transitions.png",
+          "bytes": 1912780,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "assets/templates/openchatcut-templates.json",
+          "bytes": 1789058,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "assets/readme-pic/01-editor-overview.png",
+          "bytes": 1755263,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "assets/readme-pic/06-zoom.png",
+          "bytes": 1685957,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "assets/readme-pic/05-effects.png",
+          "bytes": 1311379,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "assets/luts/CinemaGamut_CanonLog3-to-Canon709_33_Ver.1.0.cube",
+          "bytes": 1186159,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "assets/fonts/pangmen-zhengdao-qingsongti/PangmenZhengdaoQingsongti-Regular.woff2",
+          "bytes": 1166852,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "assets/fonts/huxiaobo-nanshenti/HuxiaoboNanshenti-Regular.woff2",
+          "bytes": 1166204,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "assets/fonts/smiley-sans/SmileySans-Oblique.woff2",
+          "bytes": 1150924,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "assets/branding/openchatcut-icon.icns",
+          "bytes": 1139489,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "assets/fonts/pangmen-zhengdao-biaotiti/PangmenZhengdaoBiaotiti-Regular.woff2",
+          "bytes": 1027872,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "assets/luts/Sony_Slog3_s709.cube",
+          "bytes": 970360,
+          "human_bytes": "0.00 GiB"
+        }
+      ]
+    },
+    {
+      "repo": "openmontage",
+      "bytes": 163002263,
+      "files": 2133,
+      "human_bytes": "0.15 GiB",
+      "categories": {
+        "source_and_other": 16682366,
+        "cache_or_history": 74498888,
+        "data_or_assets": 71704296,
+        "model_or_model_named": 116713
+      },
+      "model_candidates": [],
+      "largest_files": [
+        {
+          "path": ".git/objects/pack/pack-f176e630a516bac01af0cbdbe3176242f5dee501.pack",
+          "bytes": 74134369,
+          "human_bytes": "0.07 GiB"
+        },
+        {
+          "path": "assets/signal-from-tomorrow-demo.mp4",
+          "bytes": 20897137,
+          "human_bytes": "0.02 GiB"
+        },
+        {
+          "path": ".agents/skills/hyperframes-animation/examples/assets/hyperframes-showcase-hypecard.mp4",
+          "bytes": 20792681,
+          "human_bytes": "0.02 GiB"
+        },
+        {
+          "path": ".agents/skills/hyperframes-animation/examples/assets/background-tech-data-flow.mp4",
+          "bytes": 16701555,
+          "human_bytes": "0.02 GiB"
+        },
+        {
+          "path": ".agents/skills/hyperframes-animation/examples/assets/logo-hyperframes.png",
+          "bytes": 1404783,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "docs/images/backlot/storyboard.png",
+          "bytes": 1044444,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "docs/images/backlot/board-live.png",
+          "bytes": 805454,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "docs/images/backlot/script-gate.png",
+          "bytes": 633093,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "ink-theater/mocap/clips.js",
+          "bytes": 540430,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "ink-theater/examples/mocap-figure/clips.js",
+          "bytes": 540430,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": ".agents/skills/website-to-video/assets/sfx/riser.mp3",
+          "bytes": 321024,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": ".agents/skills/hyperframes-media/assets/sfx/riser.mp3",
+          "bytes": 321024,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "docs/images/backlot/library.png",
+          "bytes": 302519,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "assets/showcase.jpg",
+          "bytes": 275512,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": ".git/index",
+          "bytes": 273079,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "ink-theater/examples/mocap-figure/assets/patrickhand.ttf",
+          "bytes": 214772,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "ink-theater/assets/patrickhand.ttf",
+          "bytes": 214772,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": ".agents/skills/music-to-video/references/templates/held-text-strobe-burst/assets/texture-mask-text/masks/metal.png",
+          "bytes": 199263,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": ".agents/skills/music-to-video/references/templates/held-text-strobe-burst/assets/texture-mask-text/masks/concrete.png",
+          "bytes": 180224,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": ".agents/skills/website-to-video/assets/sfx/whoosh-cinematic.mp3",
+          "bytes": 177408,
+          "human_bytes": "0.00 GiB"
+        }
+      ]
+    },
+    {
+      "repo": "openshorts",
+      "bytes": 6938849195,
+      "files": 44614,
+      "human_bytes": "6.46 GiB",
+      "categories": {
+        "source_and_other": 83202724,
+        "model_or_model_named": 6560875,
+        "cache_or_history": 6849004154,
+        "data_or_assets": 81442
+      },
+      "model_candidates": [
+        {
+          "path": "yolov8n.pt",
+          "bytes": 6549796,
+          "human_bytes": "0.01 GiB"
+        }
+      ],
+      "largest_files": [
+        {
+          "path": ".venv/lib/python3.12/site-packages/nvidia/cu13/lib/libcublasLt.so.13",
+          "bytes": 541595600,
+          "human_bytes": "0.50 GiB"
+        },
+        {
+          "path": ".venv/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so",
+          "bytes": 456142457,
+          "human_bytes": "0.42 GiB"
+        },
+        {
+          "path": ".venv/lib/python3.12/site-packages/torch/lib/libtorch_cpu.so",
+          "bytes": 451209129,
+          "human_bytes": "0.42 GiB"
+        },
+        {
+          "path": ".venv/lib/python3.12/site-packages/triton/_C/libtriton.so",
+          "bytes": 415617000,
+          "human_bytes": "0.39 GiB"
+        },
+        {
+          "path": ".venv/lib/python3.12/site-packages/jaxlib/libjax_common.so",
+          "bytes": 348918384,
+          "human_bytes": "0.32 GiB"
+        },
+        {
+          "path": ".venv/lib/python3.12/site-packages/nvidia/cu13/lib/libcufft.so.12",
+          "bytes": 286542352,
+          "human_bytes": "0.27 GiB"
+        },
+        {
+          "path": ".venv/lib/python3.12/site-packages/nvidia/cudnn/lib/libcudnn_engines_precompiled.so.9",
+          "bytes": 245391920,
+          "human_bytes": "0.23 GiB"
+        },
+        {
+          "path": ".venv/lib/python3.12/site-packages/nvidia/cusparselt/lib/libcusparseLt.so.0",
+          "bytes": 233613145,
+          "human_bytes": "0.22 GiB"
+        },
+        {
+          "path": ".venv/lib/python3.12/site-packages/nvidia/nccl/lib/libnccl.so.2",
+          "bytes": 217995896,
+          "human_bytes": "0.20 GiB"
+        },
+        {
+          "path": ".venv/lib/python3.12/site-packages/_polars_runtime_32/_polars_runtime.abi3.so",
+          "bytes": 215600632,
+          "human_bytes": "0.20 GiB"
+        },
+        {
+          "path": ".venv/lib/python3.12/site-packages/nvidia/cu13/lib/libcusparse.so.12",
+          "bytes": 162565256,
+          "human_bytes": "0.15 GiB"
+        },
+        {
+          "path": ".venv/lib/python3.12/site-packages/nvidia/cu13/lib/libcusolver.so.12",
+          "bytes": 141152872,
+          "human_bytes": "0.13 GiB"
+        },
+        {
+          "path": ".venv/lib/python3.12/site-packages/nvidia/cu13/lib/libcurand.so.10",
+          "bytes": 132698328,
+          "human_bytes": "0.12 GiB"
+        },
+        {
+          "path": ".venv/lib/python3.12/site-packages/nvidia/cu13/lib/libnvrtc.alt.so.13",
+          "bytes": 109821488,
+          "human_bytes": "0.10 GiB"
+        },
+        {
+          "path": ".venv/lib/python3.12/site-packages/nvidia/cu13/lib/libnvrtc.so.13",
+          "bytes": 109338064,
+          "human_bytes": "0.10 GiB"
+        },
+        {
+          "path": ".venv/lib/python3.12/site-packages/nvidia/cudnn/lib/libcudnn_adv.so.9",
+          "bytes": 109169104,
+          "human_bytes": "0.10 GiB"
+        },
+        {
+          "path": ".venv/lib/python3.12/site-packages/nvidia/cu13/lib/libcusolverMg.so.12",
+          "bytes": 103956840,
+          "human_bytes": "0.10 GiB"
+        },
+        {
+          "path": ".venv/lib/python3.12/site-packages/nvidia/cu13/lib/libnvJitLink.so.13",
+          "bytes": 98806736,
+          "human_bytes": "0.09 GiB"
+        },
+        {
+          "path": ".venv/lib/python3.12/site-packages/cv2/cv2.abi3.so",
+          "bytes": 93054377,
+          "human_bytes": "0.09 GiB"
+        },
+        {
+          "path": ".git/objects/pack/pack-0d2698bc004100f99853ba46dddc645b1d079abf.pack",
+          "bytes": 78769965,
+          "human_bytes": "0.07 GiB"
+        }
+      ]
+    },
+    {
+      "repo": "pixeltable",
+      "bytes": 415598684,
+      "files": 2786,
+      "human_bytes": "0.39 GiB",
+      "categories": {
+        "source_and_other": 159663702,
+        "cache_or_history": 183905888,
+        "model_or_model_named": 367474,
+        "data_or_assets": 71661620
+      },
+      "model_candidates": [],
+      "largest_files": [
+        {
+          "path": ".git/objects/pack/pack-91c4f9b91807374c2e5db8219affc5186bdd5803.pack",
+          "bytes": 183475871,
+          "human_bytes": "0.17 GiB"
+        },
+        {
+          "path": "docs/resources/The-Pursuit-of-Happiness.mp4",
+          "bytes": 13819659,
+          "human_bytes": "0.01 GiB"
+        },
+        {
+          "path": "docs/resources/10-minute tour of Pixeltable.mp3",
+          "bytes": 8431908,
+          "human_bytes": "0.01 GiB"
+        },
+        {
+          "path": "docs/resources/images/amarg-boneyard.jpg",
+          "bytes": 8042137,
+          "human_bytes": "0.01 GiB"
+        },
+        {
+          "path": "docs/resources/audio-transcription-demo/Lex-Fridman-Podcast-430-Excerpt-1.mp4",
+          "bytes": 7701135,
+          "human_bytes": "0.01 GiB"
+        },
+        {
+          "path": "docs/resources/audio-transcription-demo/Lex-Fridman-Podcast-430-Excerpt-2.mp4",
+          "bytes": 7349724,
+          "human_bytes": "0.01 GiB"
+        },
+        {
+          "path": "docs/resources/calpy.pptx",
+          "bytes": 7208767,
+          "human_bytes": "0.01 GiB"
+        },
+        {
+          "path": "docs/resources/audio-transcription-demo/Lex-Fridman-Podcast-430-Excerpt-0.mp4",
+          "bytes": 6465748,
+          "human_bytes": "0.01 GiB"
+        },
+        {
+          "path": "tests/data/orig_videos/bangkok.mp4",
+          "bytes": 6406129,
+          "human_bytes": "0.01 GiB"
+        },
+        {
+          "path": "docs/resources/bangkok.mp4",
+          "bytes": 6406129,
+          "human_bytes": "0.01 GiB"
+        },
+        {
+          "path": "docs/release/howto/providers/working-with-bfl.ipynb",
+          "bytes": 5130782,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "tests/data/audio/sample-32-bit.wav",
+          "bytes": 4980838,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "tests/data/documents/layout-parser-paper.pdf",
+          "bytes": 4686220,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "tests/data/orig_videos/filename with spaces and '.mp4",
+          "bytes": 4480777,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "docs/release/howto/cookbooks/core/custom-iterators.ipynb",
+          "bytes": 4192609,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "docs/release/howto/cookbooks/images/img-promptable-segmentation.ipynb",
+          "bytes": 3779501,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "docs/release/howto/cookbooks/images/img-pil-transforms.ipynb",
+          "bytes": 3655480,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "tests/data/datasets/netflix_titles.csv",
+          "bytes": 3532881,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "docs/release/howto/use-cases/object-detection-in-videos.ipynb",
+          "bytes": 3446397,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "tests/data/orig_videos/10-Second Video\uff1a Grilled Pizza Quesadillas [Vj4Y1c-DSM0].webm",
+          "bytes": 3295301,
+          "human_bytes": "0.00 GiB"
+        }
+      ]
+    },
+    {
+      "repo": "temporal",
+      "bytes": 47938724,
+      "files": 3837,
+      "human_bytes": "0.04 GiB",
+      "categories": {
+        "source_and_other": 38962230,
+        "cache_or_history": 8969501,
+        "model_or_model_named": 6993
+      },
+      "model_candidates": [],
+      "largest_files": [
+        {
+          "path": ".git/objects/pack/pack-220e4cb0b0b58569965fb1457aa8e938b749ab0e.pack",
+          "bytes": 8319115,
+          "human_bytes": "0.01 GiB"
+        },
+        {
+          "path": "tests/activity_standalone_test.go",
+          "bytes": 607519,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "api/historyservice/v1/request_response.pb.go",
+          "bytes": 518947,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": ".git/index",
+          "bytes": 477402,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "service/history/workflow/mutable_state_impl.go",
+          "bytes": 374375,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "service/history/workflow/mutable_state_impl_test.go",
+          "bytes": 343053,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "service/history/history_engine_test.go",
+          "bytes": 301474,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "api/matchingservice/v1/request_response.pb.go",
+          "bytes": 295025,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "service/matching/matching_engine_test.go",
+          "bytes": 285108,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "service/frontend/workflow_handler.go",
+          "bytes": 271993,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "tests/versioning_3_test.go",
+          "bytes": 271374,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "api/adminservice/v1/request_response.pb.go",
+          "bytes": 261043,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "api/persistence/v1/executions.pb.go",
+          "bytes": 251680,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "service/frontend/workflow_handler_test.go",
+          "bytes": 235910,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "tests/update_workflow_test.go",
+          "bytes": 223976,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "tests/schedule_test.go",
+          "bytes": 211390,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "chasm/tree_test.go",
+          "bytes": 199686,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "api/deployment/v1/message.pb.go",
+          "bytes": 197443,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "service/history/interfaces/mutable_state_mock.go",
+          "bytes": 190710,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "api/historyservice/v1/request_response.go-helpers.pb.go",
+          "bytes": 186014,
+          "human_bytes": "0.00 GiB"
+        }
+      ]
+    },
+    {
+      "repo": "twick",
+      "bytes": 48388027,
+      "files": 819,
+      "human_bytes": "0.05 GiB",
+      "categories": {
+        "source_and_other": 7659279,
+        "cache_or_history": 21780566,
+        "model_or_model_named": 95716,
+        "data_or_assets": 18852466
+      },
+      "model_candidates": [],
+      "largest_files": [
+        {
+          "path": ".git/objects/pack/pack-93c0c216513be86c4216f9d792b62b39d27e220c.pack",
+          "bytes": 21622747,
+          "human_bytes": "0.02 GiB"
+        },
+        {
+          "path": "packages/studio/src/assets/effects/sepia.png",
+          "bytes": 5540048,
+          "human_bytes": "0.01 GiB"
+        },
+        {
+          "path": "packages/studio/src/assets/effects/pixelate.png",
+          "bytes": 4726618,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "packages/studio/src/assets/effects/warp.png",
+          "bytes": 4279635,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "packages/studio/src/assets/effects/vignette.png",
+          "bytes": 3474949,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "pnpm-lock.yaml",
+          "bytes": 854434,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "packages/visualizer/src/fonts/Montserrat-VariableFont_wght.ttf",
+          "bytes": 688600,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "packages/visualizer/src/fonts/Roboto-VariableFont_wdth,wght.ttf",
+          "bytes": 487768,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "packages/visualizer/src/fonts/Birthstone-Regular.ttf",
+          "bytes": 376328,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "packages/visualizer/src/fonts/Rubik.ttf",
+          "bytes": 353768,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "packages/visualizer/src/fonts/PlayfairDisplay-VariableFont_wght.ttf",
+          "bytes": 301576,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "packages/video-editor/src/assets/blur.gif",
+          "bytes": 291613,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "packages/visualizer/src/fonts/Mulish-VariableFont_wght.ttf",
+          "bytes": 210380,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "packages/visualizer/src/fonts/Corinthia-Regular.ttf",
+          "bytes": 206748,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "packages/visualizer/src/fonts/Corinthia-Bold.ttf",
+          "bytes": 199760,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "packages/visualizer/src/fonts/Kapakana.ttf",
+          "bytes": 186572,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "packages/visualizer/src/fonts/LondrinaOutline-Regular.ttf",
+          "bytes": 165272,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "packages/visualizer/src/fonts/Poppins-Regular.ttf",
+          "bytes": 158240,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "packages/visualizer/src/fonts/ImperialScript-Regular.ttf",
+          "bytes": 154356,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "packages/visualizer/src/fonts/KumarOneOutline-Regular.ttf",
+          "bytes": 120648,
+          "human_bytes": "0.00 GiB"
+        }
+      ]
+    },
+    {
+      "repo": "videoagent",
+      "bytes": 300641649,
+      "files": 885,
+      "human_bytes": "0.28 GiB",
+      "categories": {
+        "source_and_other": 17481135,
+        "cache_or_history": 137808471,
+        "data_or_assets": 115272005,
+        "model_or_model_named": 30080038
+      },
+      "model_candidates": [
+        {
+          "path": "tools/seed-vc/campplus_cn_common.bin",
+          "bytes": 28036335,
+          "human_bytes": "0.03 GiB"
+        },
+        {
+          "path": "tools/seed-vc/baselines/dnsmos/sig_bak_ovr.onnx",
+          "bytes": 1157965,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "tools/seed-vc/baselines/dnsmos/model_v8.onnx",
+          "bytes": 224860,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "tools/fish-speech/temp/codes_0.npy",
+          "bytes": 7040,
+          "human_bytes": "0.00 GiB"
+        }
+      ],
+      "largest_files": [
+        {
+          "path": ".git/objects/pack/pack-78fcd775f150abd163ff2a769246f09924ba6a2b.pack",
+          "bytes": 135748758,
+          "human_bytes": "0.13 GiB"
+        },
+        {
+          "path": "tools/seed-vc/campplus_cn_common.bin",
+          "bytes": 28036335,
+          "human_bytes": "0.03 GiB"
+        },
+        {
+          "path": "tools/DiffSinger/data/processed/ljspeech/metadata_phone.csv",
+          "bytes": 6933172,
+          "human_bytes": "0.01 GiB"
+        },
+        {
+          "path": "VideoEdit/video_reqs.json",
+          "bytes": 5434291,
+          "human_bytes": "0.01 GiB"
+        },
+        {
+          "path": "tools/seed-vc/examples/source/Wiz Khalifa,Charlie Puth - See You Again [vocals]_[cut_28sec].wav",
+          "bytes": 5411452,
+          "human_bytes": "0.01 GiB"
+        },
+        {
+          "path": "assets/adapted_standupcomedy_cover.png",
+          "bytes": 4526543,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "VideoEdit/audio_reqs.json",
+          "bytes": 4414081,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "assets/openai_news_cover.png",
+          "bytes": 3886682,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "assets/interstella_cover_love.png",
+          "bytes": 3759857,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "assets/dune_original_cover.png",
+          "bytes": 3691924,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "assets/adapted_crosstalk_cover.png",
+          "bytes": 3598933,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "assets/youhebuke_cover.png",
+          "bytes": 3579915,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "assets/nezha_cover.png",
+          "bytes": 3483848,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "tools/seed-vc/assets/real-time-demo.webm",
+          "bytes": 3311794,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "assets/joylife_cover.png",
+          "bytes": 3049094,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "assets/titanic_cover.png",
+          "bytes": 3010949,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "assets/interstella_cover.png",
+          "bytes": 2981670,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "assets/crosstalk_original_cover.png",
+          "bytes": 2964606,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "tools/seed-vc/examples/source/TECHNOPOLIS - 2085 [vocals]_[cut_14sec].wav",
+          "bytes": 2796016,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "assets/airencuoguo_cover.png",
+          "bytes": 2741982,
+          "human_bytes": "0.00 GiB"
+        }
+      ]
+    },
+    {
+      "repo": "videoclipper",
+      "bytes": 3317729,
+      "files": 104,
+      "human_bytes": "0.00 GiB",
+      "categories": {
+        "source_and_other": 1834561,
+        "cache_or_history": 1284570,
+        "model_or_model_named": 198598
+      },
+      "model_candidates": [],
+      "largest_files": [
+        {
+          "path": ".git/objects/pack/pack-2ae78bb4f590552604e619e4a470d54e4db912f2.pack",
+          "bytes": 1245235,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "video-walkthrough-thumbnail.jpg",
+          "bytes": 856769,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "src/App.tsx",
+          "bytes": 245224,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "package-lock.json",
+          "bytes": 220624,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "public/models/tiny_face_detector_model-shard1",
+          "bytes": 193321,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "tsconfig.tsbuildinfo",
+          "bytes": 190869,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "bun.lock",
+          "bytes": 107489,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "app/api/gemini-refine/route.js",
+          "bytes": 23701,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "BLOG_OUTLINE.md",
+          "bytes": 14083,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "src/components/shortener/processing-status-card.tsx",
+          "bytes": 13056,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "src/features/shortener/normalize.ts",
+          "bytes": 9493,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "app/api/gemini-face-boxes/route.js",
+          "bytes": 8819,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "src/lib/transcript.ts",
+          "bytes": 8646,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "src/components/shortener/preview-canvas.tsx",
+          "bytes": 8336,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": ".git/index",
+          "bytes": 7843,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "src/components/shortener/debug-modal.tsx",
+          "bytes": 7837,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "src/components/ui/dropdown-menu.tsx",
+          "bytes": 7529,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "app/api/gemini-refine/prompts.js",
+          "bytes": 6398,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "README.md",
+          "bytes": 6027,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "src/components/shortener/highlight-picker.tsx",
+          "bytes": 5875,
+          "human_bytes": "0.00 GiB"
+        }
+      ]
+    },
+    {
+      "repo": "videodb-director",
+      "bytes": 768967,
+      "files": 167,
+      "human_bytes": "0.00 GiB",
+      "categories": {
+        "source_and_other": 524871,
+        "cache_or_history": 222444,
+        "data_or_assets": 21652
+      },
+      "model_candidates": [],
+      "largest_files": [
+        {
+          "path": ".git/objects/pack/pack-a77af7487323a8013eacecd0ca5c7452c676d1f3.pack",
+          "bytes": 174153,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "backend/director/agents/editing/agent.py",
+          "bytes": 37031,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "backend/director/agents/subtitle.py",
+          "bytes": 23988,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "backend/director/tools/videodb_tool.py",
+          "bytes": 20579,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "backend/director/agents/text_to_movie.py",
+          "bytes": 20570,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "docs/assets/logo.png",
+          "bytes": 17115,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "backend/director/agents/prompt_clip.py",
+          "bytes": 16103,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "backend/director/core/reasoning.py",
+          "bytes": 15858,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": ".git/index",
+          "bytes": 14435,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "backend/director/agents/clone_voice.py",
+          "bytes": 13954,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "backend/director/agents/voice_replacement.py",
+          "bytes": 13645,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "frontend/tailwind.config.js",
+          "bytes": 13194,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "backend/director/agents/video_generation.py",
+          "bytes": 13120,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "backend/director/agents/search.py",
+          "bytes": 12762,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "backend/director/core/session.py",
+          "bytes": 12135,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "backend/director/agents/index.py",
+          "bytes": 11715,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "README.md",
+          "bytes": 11301,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "backend/director/agents/audio_generation.py",
+          "bytes": 10725,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "backend/director/tools/elevenlabs.py",
+          "bytes": 10440,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "backend/director/db/sqlite/db.py",
+          "bytes": 9839,
+          "human_bytes": "0.00 GiB"
+        }
+      ]
+    },
+    {
+      "repo": "vimax",
+      "bytes": 6468439,
+      "files": 219,
+      "human_bytes": "0.01 GiB",
+      "categories": {
+        "source_and_other": 1804145,
+        "cache_or_history": 2586738,
+        "model_or_model_named": 14376,
+        "data_or_assets": 2063180
+      },
+      "model_candidates": [],
+      "largest_files": [
+        {
+          "path": ".git/objects/pack/pack-6ea6f1ec70b1b043f3933ca64b9b3430f69d3fa3.pack",
+          "bytes": 2506487,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "assets/vimax.png",
+          "bytes": 1793039,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "uv.lock",
+          "bytes": 299077,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "assets/vimax-web-ui.png",
+          "bytes": 269173,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "web/package-lock.json",
+          "bytes": 135979,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "pipelines/novel2movie_pipeline.py",
+          "bytes": 55151,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "web/src/styles.css",
+          "bytes": 54264,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "agent_runtime/vimax_adapters.py",
+          "bytes": 47112,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "pipelines/script2video_pipeline.py",
+          "bytes": 46962,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "ui/package-lock.json",
+          "bytes": 39289,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "web/src/App.tsx",
+          "bytes": 35495,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "tests/test_vimax_adapters.py",
+          "bytes": 27463,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "agents/script_planner.py",
+          "bytes": 26177,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "agent_runtime/tools.py",
+          "bytes": 21897,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "ui/src/cli.tsx",
+          "bytes": 21553,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "web/src/ArtifactViews.tsx",
+          "bytes": 21180,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "agents/storyboard_artist.py",
+          "bytes": 18817,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": ".git/index",
+          "bytes": 18539,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "agents/global_information_planner.py",
+          "bytes": 18167,
+          "human_bytes": "0.00 GiB"
+        },
+        {
+          "path": "agent_runtime/session_index.py",
+          "bytes": 17390,
+          "human_bytes": "0.00 GiB"
+        }
+      ]
+    }
+  ]
+}

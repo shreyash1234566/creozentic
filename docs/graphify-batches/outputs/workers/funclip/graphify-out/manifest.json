@@ -1,0 +1,188 @@
+{
+  "funclip/__init__.py": {
+    "mtime": 1787135348.5432856,
+    "seen": 1787211344.1649113,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "funclip/introduction.py": {
+    "mtime": 1787135348.5432856,
+    "seen": 1787211344.1649148,
+    "ast_hash": "b396aa668c8f8446c6515077e74393f4",
+    "semantic_hash": "b396aa668c8f8446c6515077e74393f4"
+  },
+  "funclip/launch.py": {
+    "mtime": 1787135348.5432856,
+    "seen": 1787211344.1649165,
+    "ast_hash": "527d2b88c42038eaae4daf23a0c95369",
+    "semantic_hash": "527d2b88c42038eaae4daf23a0c95369"
+  },
+  "funclip/launch_config.py": {
+    "mtime": 1787135348.5432856,
+    "seen": 1787211344.1649172,
+    "ast_hash": "a3c9c1b3129afb3ccec3c993726a4eb0",
+    "semantic_hash": "a3c9c1b3129afb3ccec3c993726a4eb0"
+  },
+  "funclip/llm/demo_prompt.py": {
+    "mtime": 1787135348.5432856,
+    "seen": 1787211344.1649177,
+    "ast_hash": "27db0dd7ddbcd4ea002349ececbfe3e0",
+    "semantic_hash": "27db0dd7ddbcd4ea002349ececbfe3e0"
+  },
+  "funclip/llm/g4f_openai_api.py": {
+    "mtime": 1787135348.5432856,
+    "seen": 1787211344.1649182,
+    "ast_hash": "e27a32e2310498182bc66c99a425217c",
+    "semantic_hash": "e27a32e2310498182bc66c99a425217c"
+  },
+  "funclip/llm/litellm_api.py": {
+    "mtime": 1787135348.5472856,
+    "seen": 1787211344.1649194,
+    "ast_hash": "750353d5b124ff3b9c5b72a89e661016",
+    "semantic_hash": "750353d5b124ff3b9c5b72a89e661016"
+  },
+  "funclip/llm/openai_api.py": {
+    "mtime": 1787135348.5472856,
+    "seen": 1787211344.1649199,
+    "ast_hash": "065cd5372a6749117eded2ab9e1dc63c",
+    "semantic_hash": "065cd5372a6749117eded2ab9e1dc63c"
+  },
+  "funclip/llm/qwen_api.py": {
+    "mtime": 1787135348.5472856,
+    "seen": 1787211344.1649206,
+    "ast_hash": "07de032f448a958b3c676889d53c5092",
+    "semantic_hash": "07de032f448a958b3c676889d53c5092"
+  },
+  "funclip/llm/twelvelabs_api.py": {
+    "mtime": 1787135348.5472856,
+    "seen": 1787211344.1649213,
+    "ast_hash": "acad8adf3e6eec2c9ec8068c47d7faa2",
+    "semantic_hash": "acad8adf3e6eec2c9ec8068c47d7faa2"
+  },
+  "funclip/test/imagemagick_test.py": {
+    "mtime": 1787135348.5472856,
+    "seen": 1787211344.1649218,
+    "ast_hash": "756301c1f0aff9e0e633ab690ec56db1",
+    "semantic_hash": "756301c1f0aff9e0e633ab690ec56db1"
+  },
+  "funclip/test/test.sh": {
+    "mtime": 1787135348.5472856,
+    "seen": 1787211344.1649227,
+    "ast_hash": "f214e786b978d3853e64a76d20710312",
+    "semantic_hash": "f214e786b978d3853e64a76d20710312"
+  },
+  "funclip/utils/argparse_tools.py": {
+    "mtime": 1787135348.5472856,
+    "seen": 1787211344.164923,
+    "ast_hash": "2b8d80bb405c4c19cbcebb72ff8fe87c",
+    "semantic_hash": "2b8d80bb405c4c19cbcebb72ff8fe87c"
+  },
+  "funclip/utils/subtitle_utils.py": {
+    "mtime": 1787135348.5472856,
+    "seen": 1787211344.1649237,
+    "ast_hash": "3d4a386497d0fe4f6b5d746c97013ac3",
+    "semantic_hash": "3d4a386497d0fe4f6b5d746c97013ac3"
+  },
+  "funclip/utils/trans_utils.py": {
+    "mtime": 1787135348.5472856,
+    "seen": 1787211344.1649241,
+    "ast_hash": "7c45d0237d30351d5da2409f986c8de1",
+    "semantic_hash": "7c45d0237d30351d5da2409f986c8de1"
+  },
+  "funclip/videoclipper.py": {
+    "mtime": 1787135348.5472856,
+    "seen": 1787211344.1649246,
+    "ast_hash": "75b4859371fe3553cc585387319516b6",
+    "semantic_hash": "75b4859371fe3553cc585387319516b6"
+  },
+  "scripts/build_release_assets.py": {
+    "mtime": 1787135348.5472856,
+    "seen": 1787211344.1649253,
+    "ast_hash": "592c05df052ef829708b05822bd604d0",
+    "semantic_hash": "592c05df052ef829708b05822bd604d0"
+  },
+  "tests/test_canonical_qwenaudio_links.py": {
+    "mtime": 1787135348.5472856,
+    "seen": 1787211344.1649425,
+    "ast_hash": "a8ae7b7012c9ca9526ed1f3eba5e7522",
+    "semantic_hash": "a8ae7b7012c9ca9526ed1f3eba5e7522"
+  },
+  "tests/test_community_links.py": {
+    "mtime": 1787135348.5472856,
+    "seen": 1787211344.1649435,
+    "ast_hash": "5ebf3f80b766fc7ca3f126556a637075",
+    "semantic_hash": "5ebf3f80b766fc7ca3f126556a637075"
+  },
+  "tests/test_duplicate_text_matching.py": {
+    "mtime": 1787135348.5472856,
+    "seen": 1787211344.1649442,
+    "ast_hash": "a59c83d336c47965a6f14d0376dfefec",
+    "semantic_hash": "a59c83d336c47965a6f14d0376dfefec"
+  },
+  "tests/test_funasr_requirement.py": {
+    "mtime": 1787135348.5472856,
+    "seen": 1787211344.164945,
+    "ast_hash": "7fe55af1bf14736be9c9caa06410fe7f",
+    "semantic_hash": "7fe55af1bf14736be9c9caa06410fe7f"
+  },
+  "tests/test_github_templates.py": {
+    "mtime": 1787135348.5472856,
+    "seen": 1787211344.1649454,
+    "ast_hash": "ccb1884f3db8e044671fb2fd1802d8f8",
+    "semantic_hash": "ccb1884f3db8e044671fb2fd1802d8f8"
+  },
+  "tests/test_gradio_runtime_compat.py": {
+    "mtime": 1787135348.5472856,
+    "seen": 1787211344.1649463,
+    "ast_hash": "ee05a8585dda5304220080211bb107a5",
+    "semantic_hash": "ee05a8585dda5304220080211bb107a5"
+  },
+  "tests/test_litellm_api.py": {
+    "mtime": 1787135348.5472856,
+    "seen": 1787211344.164947,
+    "ast_hash": "ccda2b75c865577933b4220e85a666dd",
+    "semantic_hash": "ccda2b75c865577933b4220e85a666dd"
+  },
+  "tests/test_minimax_api.py": {
+    "mtime": 1787135348.5472856,
+    "seen": 1787211344.1649477,
+    "ast_hash": "4e96f4e773fab2d785710297fc2a9feb",
+    "semantic_hash": "4e96f4e773fab2d785710297fc2a9feb"
+  },
+  "tests/test_minimax_launch_integration.py": {
+    "mtime": 1787135348.5472856,
+    "seen": 1787211344.1649485,
+    "ast_hash": "121ec69eccdea1f0e57de7808c7a9ea3",
+    "semantic_hash": "121ec69eccdea1f0e57de7808c7a9ea3"
+  },
+  "tests/test_model_selection.py": {
+    "mtime": 1787135348.5472856,
+    "seen": 1787211344.1649487,
+    "ast_hash": "4a062402f0f9fa3017519ceb1f3653cb",
+    "semantic_hash": "4a062402f0f9fa3017519ceb1f3653cb"
+  },
+  "tests/test_openai_api.py": {
+    "mtime": 1787135348.5472856,
+    "seen": 1787211344.1649494,
+    "ast_hash": "ebed67af2ec35950160f89ee1e08eef1",
+    "semantic_hash": "ebed67af2ec35950160f89ee1e08eef1"
+  },
+  "tests/test_recognition_result_compat.py": {
+    "mtime": 1787135348.5472856,
+    "seen": 1787211344.1649501,
+    "ast_hash": "e7222a6765b5885b628e847f682de6fa",
+    "semantic_hash": "e7222a6765b5885b628e847f682de6fa"
+  },
+  "tests/test_release_contract.py": {
+    "mtime": 1787135348.5472856,
+    "seen": 1787211344.1649506,
+    "ast_hash": "2e7645b46915e781e7f6b64dc4a3f072",
+    "semantic_hash": "2e7645b46915e781e7f6b64dc4a3f072"
+  },
+  "tests/test_twelvelabs_pegasus.py": {
+    "mtime": 1787135348.5472856,
+    "seen": 1787211344.1649513,
+    "ast_hash": "f5bd121b635db41dd88a45b723a2f4b6",
+    "semantic_hash": "f5bd121b635db41dd88a45b723a2f4b6"
+  }
+}

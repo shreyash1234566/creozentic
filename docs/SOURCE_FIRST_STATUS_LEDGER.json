@@ -1,0 +1,35 @@
+{
+  "project": "creozentic",
+  "policy": "original-source-first",
+  "repositories": [
+    {"id":"openshorts","path":"third_party/openshorts","entrypoint":"main.py","status":"verified-active","originalSourceUsed":true,"adapter":"src/server/open-source-editing.ts"},
+    {"id":"cutscript","path":"third_party/cutscript","entrypoint":"backend/main.py","status":"retained-pending-runtime","originalSourceUsed":true,"adapter":"apps/worker/adopted_core.py"},
+    {"id":"videoclipper","path":"third_party/videoclipper","entrypoint":"package.json scripts","status":"retained-pending-runtime","originalSourceUsed":true,"adapter":"apps/worker/adopted_core.py"},
+    {"id":"ai-broll","path":"third_party/ai-broll","entrypoint":"AI_Broll.ipynb","status":"retained-pending-runtime","originalSourceUsed":true,"adapter":"apps/worker/adopted_core.py"},
+    {"id":"funclip","path":"third_party/funclip","entrypoint":"funclip/launch.py","status":"retained-pending-runtime","originalSourceUsed":true,"adapter":"apps/worker/adopted_core.py"},
+    {"id":"ave","path":"third_party/ave","entrypoint":"src/main.py","status":"retained-pending-runtime","originalSourceUsed":true,"adapter":"apps/worker/adopted_core.py"},
+    {"id":"pixeltable","path":"third_party/pixeltable","entrypoint":"pxt serve / Python API","status":"retained-pending-runtime","originalSourceUsed":true,"adapter":"apps/worker/adopted_core.py"},
+    {"id":"vimax","path":"third_party/vimax","entrypoint":"main_idea2video.py / main_script2video.py","status":"retained-pending-runtime","originalSourceUsed":true,"adapter":"apps/worker/adopted_core.py"},
+    {"id":"videoagent","path":"third_party/videoagent","entrypoint":"main.py","status":"retained-pending-runtime","originalSourceUsed":true,"adapter":"apps/worker/adopted_core.py"},
+    {"id":"videodb-director","path":"third_party/videodb-director","entrypoint":"backend / Docker","status":"retained-pending-runtime","originalSourceUsed":true,"adapter":"apps/worker/adopted_core.py"},
+    {"id":"comfyui","path":"third_party/comfyui","entrypoint":"main.py / HTTP API","status":"health-verified-pending-models","originalSourceUsed":true,"adapter":"apps/worker/adopted_core.py"},
+    {"id":"temporal","path":"third_party/temporal","entrypoint":"Temporal server","status":"retained-pending-runtime","originalSourceUsed":true,"adapter":"apps/worker/adopted_core.py"},
+    {"id":"openchatcut","path":"third_party/openchatcut","entrypoint":"package.json scripts","status":"retained-pending-runtime","originalSourceUsed":true,"adapter":"apps/worker/adopted_core.py"},
+    {"id":"openmontage","path":"third_party/openmontage","entrypoint":"backlot/__main__.py / Remotion","status":"retained-pending-runtime","originalSourceUsed":true,"adapter":"apps/worker/adopted_core.py"},
+    {"id":"twick","path":"third_party/twick","entrypoint":"pnpm workspace scripts","status":"retained-pending-runtime","originalSourceUsed":true,"adapter":"apps/worker/adopted_core.py"},
+    {"id":"ffmpeg","path":"system","entrypoint":"ffmpeg","status":"verified-active","originalSourceUsed":true,"adapter":"src/server/editor-render.ts"}
+  ],
+  "healthCheckEvidence": {
+    "date": "2026-08-19",
+    "openshorts": "Earlier direct source run remains the verified execution evidence; the expected isolated Python path was unavailable in the current checkout at the tested location.",
+    "cutscript": "Original backend import failed because Python dependencies are not installed/aligned.",
+    "funclip": "Original launch import failed because Gradio/dependencies are not installed.",
+    "ave": "Original entrypoint import failed because PyYAML/dependencies are not installed.",
+    "vimax": "Original entrypoint import failed because pipeline dependencies are not installed.",
+    "videoagent": "Original entrypoint import failed because environment dependencies are not installed.",
+    "comfyui": "Original main.py --help passed.",
+    "openmontage": "Original backlot module was not installed in the active Python environment.",
+    "ffmpeg": "System ffmpeg -version passed.",
+    "interpretation": "These results describe runtime activation, not source absence."
+  }
+}

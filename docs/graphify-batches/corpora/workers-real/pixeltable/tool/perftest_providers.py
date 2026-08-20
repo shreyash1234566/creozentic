@@ -1,0 +1,178 @@
+"""
+Performance test for chat completion endpoint integrations in Pixeltable.
+"""
+
+import argparse
+import logging
+import random
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import Any
+
+import pixeltable as pxt
+import pixeltable.functions as pxtf
+
+from .perftest_udfs import create_chatgpt_prompt, create_simple_messages_prompt, create_simple_prompt
+
+
+@dataclass
+class ProviderConfig:
+    """Configuration for a provider."""
+
+    prompt_udf: pxt.Function
+    udf: pxt.Function
+    default_model: str
+    kwargs: dict[str, Any]
+
+
+def create_provider_configs(max_tokens: int) -> dict[str, ProviderConfig]:
+    """Create configuration for each supported provider."""
+    from google.genai.types import GenerateContentConfigDict
+
+    return {
+        'openai': ProviderConfig(
+            prompt_udf=create_chatgpt_prompt,
+            udf=pxtf.openai.chat_completions,
+            default_model='gpt-4o-mini',
+            kwargs={'model_kwargs': {'max_tokens': max_tokens, 'temperature': 0.7}},
+        ),
+        'anthropic': ProviderConfig(
+            prompt_udf=create_simple_messages_prompt,
+            udf=pxtf.anthropic.messages,
+            default_model='claude-3-haiku-20240307',
+            kwargs={
+                'max_tokens': max_tokens,
+                'model_kwargs': {
+                    'temperature': 0.7,
+                    'system': 'You are a creative writer who creates natural-sounding sentences.',
+                },
+            },
+        ),
+        'gemini': ProviderConfig(
+            prompt_udf=create_simple_prompt,
+            udf=pxtf.gemini.generate_content,
+            default_model='gemini-2.5-flash',
+            kwargs={
+                'config': GenerateContentConfigDict(
+                    candidate_count=3,
+                    stop_sequences=['\n'],
+                    max_output_tokens=300,
+                    temperature=1.0,
+                    top_p=0.95,
+                    top_k=40,
+                    response_mime_type='text/plain',
+                )
+            },
+        ),
+        'fireworks': ProviderConfig(
+            prompt_udf=create_simple_messages_prompt,
+            udf=pxtf.fireworks.chat_completions,
+            default_model='accounts/fireworks/models/mixtral-8x22b-instruct',
+            kwargs={'model_kwargs': {'max_tokens': max_tokens, 'top_k': 40, 'top_p': 0.9, 'temperature': 0.7}},
+        ),
+        'groq': ProviderConfig(
+            prompt_udf=create_chatgpt_prompt,
+            udf=pxtf.groq.chat_completions,
+            default_model='llama-3.1-8b-instant',
+            kwargs={'model_kwargs': {'max_tokens': max_tokens, 'temperature': 0.7}},
+        ),
+        'mistralai': ProviderConfig(
+            prompt_udf=create_chatgpt_prompt,
+            udf=pxtf.mistralai.chat_completions,
+            default_model='mistral-tiny',
+            kwargs={'model_kwargs': {'max_tokens': max_tokens, 'temperature': 0.7}},
+        ),
+        'together': ProviderConfig(
+            prompt_udf=create_simple_prompt,
+            udf=pxtf.together.completions,
+            default_model='mistralai/Mixtral-8x7B-Instruct-v0.1',
+            kwargs={'model_kwargs': {'max_tokens': max_tokens, 'temperature': 0.7}},
+        ),
+        'deepseek': ProviderConfig(
+            prompt_udf=create_chatgpt_prompt,
+            udf=pxtf.deepseek.chat_completions,
+            default_model='deepseek-v4-flash',
+            kwargs={'model_kwargs': {'max_tokens': max_tokens, 'temperature': 0.7}},
+        ),
+        'bedrock': ProviderConfig(
+            prompt_udf=create_simple_messages_prompt,
+            udf=pxtf.bedrock.converse,
+            default_model='anthropic.claude-3-haiku-20240307-v1:0',
+            kwargs={'model_kwargs': {'max_tokens': max_tokens, 'temperature': 0.7}},
+        ),
+        'openrouter': ProviderConfig(
+            prompt_udf=create_chatgpt_prompt,
+            udf=pxtf.openrouter.chat_completions,
+            default_model='anthropic/claude-3.5-sonnet',
+            kwargs={'model_kwargs': {'max_tokens': max_tokens, 'temperature': 0.7}},
+        ),
+    }
+
+
+def execute_perf_test(
+    *, n: int, t: int, provider: ProviderConfig, recompute_excs: bool = False
+) -> tuple[timedelta, int]:
+    """Executes the provided performance test and returns the duration and number of exceptions."""
+    # Load wordlist
+    with open('tests/data/random_words', encoding='utf-8') as f:
+        wordlist = [word.strip() for word in f if not word.startswith('#')]
+
+    model = provider.default_model
+    print(f'Using provider: {provider}')
+    print(f'Using model: {model}')
+    print(f'Generating {n} rows x {t} tokens')
+
+    tbl = pxt.create_table(
+        'sentence_tbl', {'word1': pxt.String | None, 'word2': pxt.String | None}, if_exists='replace'
+    )
+    tbl.add_computed_column(prompt=provider.prompt_udf(t, tbl.word1, tbl.word2))
+    tbl.add_computed_column(response=provider.udf(tbl.prompt, model=model, **provider.kwargs))
+
+    rows = ({'word1': word1, 'word2': word2} for word1, word2 in (random.sample(wordlist, k=2) for _ in range(n)))
+    start = datetime.now()
+    status = tbl.insert(rows, on_error='ignore')
+    end = datetime.now()
+
+    print(status)
+
+    if recompute_excs and status.num_excs > 0:
+        print(f'Recomputing {status.num_excs} exceptions')
+        status = tbl.recompute_columns('response', errors_only=True)
+        print(f'Recompute status: {status}')
+
+    print(f'Total time: {(end - start).total_seconds():.2f} seconds')
+
+    return (end - start), status.num_excs
+
+
+def main() -> None:
+    """Main function to run the test."""
+    parser = argparse.ArgumentParser(
+        description='Test LLM endpoint providers',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s --provider openai --n 10 --t 100
+  %(prog)s --provider gemini --n 5 --model gemini-2.5-flash
+  %(prog)s --provider anthropic --n 20
+        """,
+    )
+
+    parser.add_argument('--provider', required=True, help='AI provider to use for sentence generation')
+    parser.add_argument('--n', type=int, required=True, help='Number of word pairs')
+    parser.add_argument('--t', type=int, default=10, help='Length of output in tokens')
+    parser.add_argument('--model', help='Model to use (overrides provider default)')
+    parser.add_argument('--log-level', type=int, default=10, help='Logging level (default: 10)')
+    args = parser.parse_args()
+
+    provider_configs = create_provider_configs(args.t)
+    provider_config = provider_configs[args.provider]
+    if args.model:
+        provider_config.default_model = args.model
+
+    logging.getLogger('pixeltable').setLevel(args.log_level)
+    execute_perf_test(n=args.n, t=args.t, provider=provider_config)
+
+
+if __name__ == '__main__':
+    main()

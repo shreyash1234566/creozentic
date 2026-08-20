@@ -1,0 +1,122 @@
+import pytest
+
+import pixeltable as pxt
+
+from ..utils import rerun_on_network_error, skip_test_if_no_client, skip_test_if_not_installed, validate_update_status
+
+pytestmark = pytest.mark.local('UDF/integration test')
+
+
+@pytest.mark.remote_api
+@pytest.mark.very_expensive  # Not really "very expensive", but Together AI is too unreliable for merge queue
+@rerun_on_network_error()
+class TestTogether:
+    def test_completions(self, uses_db: None) -> None:
+        skip_test_if_not_installed('together')
+        skip_test_if_no_client('together')
+        from pixeltable.functions.together import completions
+
+        t = pxt.create_table('test_tbl', {'input': pxt.String | None})
+        t.add_computed_column(
+            output=completions(prompt=t.input, model='Qwen/Qwen3.5-9B', model_kwargs={'stop': ['\n']})
+        )
+        t.add_computed_column(
+            output_2=completions(
+                prompt=t.input,
+                model='Qwen/Qwen3.5-9B',
+                model_kwargs={
+                    'max_tokens': 300,
+                    'stop': ['\n'],
+                    'temperature': 0.7,
+                    'top_p': 0.9,
+                    'top_k': 40,
+                    'repetition_penalty': 1.1,
+                    'logprobs': 1,
+                    'n': 3,
+                },
+            )
+        )
+        validate_update_status(t.insert(input='I am going to the '), 1)
+        result = t.collect()
+        assert len(result['output'][0]['choices'][0]['text']) > 0
+        assert len(result['output_2'][0]['choices'][0]['text']) > 0
+
+    def test_chat_completions(self, uses_db: None) -> None:
+        skip_test_if_not_installed('together')
+        skip_test_if_no_client('together')
+        from pixeltable.functions.together import chat_completions
+
+        t = pxt.create_table('test_tbl', {'input': pxt.String | None})
+        messages = [{'role': 'user', 'content': t.input}]
+        t.add_computed_column(
+            output=chat_completions(messages=messages, model='openai/gpt-oss-20b', model_kwargs={'stop': ['\n']})
+        )
+        t.add_computed_column(
+            output_2=chat_completions(
+                messages=messages,
+                model='openai/gpt-oss-20b',
+                model_kwargs={
+                    'max_tokens': 300,
+                    'stop': ['\n'],
+                    'temperature': 0.7,
+                    'top_p': 0.9,
+                    'top_k': 40,
+                    'repetition_penalty': 1.1,
+                    'logprobs': 1,
+                    'n': 3,
+                    'safety_model': 'meta-llama/Llama-Guard-4-12B',
+                    'response_format': {'type': 'json_object'},
+                },
+            )
+        )
+        validate_update_status(t.insert(input='Give me a typical example of a JSON structure.'), 1)
+        result = t.collect()
+        assert len(result['output'][0]['choices'][0]['message']) > 0
+        assert len(result['output_2'][0]['choices'][0]['message']) > 0
+
+    def test_embeddings(self, uses_db: None) -> None:
+        skip_test_if_not_installed('together')
+        skip_test_if_no_client('together')
+        from pixeltable.functions.together import embeddings
+
+        t = pxt.create_table('test_tbl', {'input': pxt.String | None})
+        t.add_computed_column(embed=embeddings(input=t.input, model='intfloat/multilingual-e5-large-instruct'))
+        validate_update_status(t.insert(input='Together AI provides a variety of embeddings models.'), 1)
+        assert len(t.collect()['embed'][0]) > 0
+
+    @pytest.mark.expensive
+    def test_image_generations(self, uses_db: None) -> None:
+        skip_test_if_not_installed('together')
+        skip_test_if_no_client('together')
+        from pixeltable.functions.together import image_generations
+
+        t = pxt.create_table('test_tbl', {'input': pxt.String | None, 'negative_prompt': pxt.String | None})
+        t.add_computed_column(
+            img=image_generations(t.input, model='black-forest-labs/FLUX.1-schnell', model_kwargs={'steps': 5})
+        )
+        t.add_computed_column(
+            img_2=image_generations(
+                t.input,
+                model='black-forest-labs/FLUX.1-schnell',
+                model_kwargs={
+                    'steps': 5,
+                    'width': 768,
+                    'height': 1024,
+                    'seed': 4171780,
+                    'negative_prompt': t.negative_prompt,
+                },
+            )
+        )
+        validate_update_status(
+            t.insert(
+                [
+                    {'input': 'A friendly dinosaur playing tennis in a cornfield'},
+                    {'input': 'A friendly dinosaur playing tennis in a cornfield', 'negative_prompt': 'tennis court'},
+                ]
+            ),
+            2,
+        )
+        assert t.collect()['img'][0].size == (1024, 768)
+        assert t.collect()['img_2'][0].size == (768, 1024)
+        assert t.collect()['img'][1].size == (1024, 768)
+        assert t.collect()['img_2'][1].size == (768, 1024)

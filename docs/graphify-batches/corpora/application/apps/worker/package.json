@@ -1,0 +1,14 @@
+{
+  "name": "@creozentic/worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/worker.ts"
+  },
+  "dependencies": {
+    "@creozentic/video": "workspace:*",
+    "bullmq": "^6.0.11",
+    "ioredis": "^6.0.0",
+    "tsx": "^4.23.12"
+  }
+}

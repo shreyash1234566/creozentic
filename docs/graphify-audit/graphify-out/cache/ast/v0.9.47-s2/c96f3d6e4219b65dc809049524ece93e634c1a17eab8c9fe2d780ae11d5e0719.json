@@ -1,0 +1,1 @@
+{"nodes": [{"id": "pkg_comfyui", "label": "ComfyUI", "file_type": "code", "type": "package", "ecosystem": "python", "source_file": "third_party/comfyui/pyproject.toml", "source_location": "L1", "version": "0.33.0"}], "edges": []}

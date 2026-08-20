@@ -1,0 +1,1319 @@
+from __future__ import annotations
+
+import copy
+from textwrap import dedent
+from typing import TYPE_CHECKING, Any, Iterable, Literal, Sequence, cast
+from uuid import UUID
+
+import sqlalchemy as sql
+
+import pixeltable as pxt
+from pixeltable import catalog, exceptions as excs, exec, exprs
+from pixeltable.catalog import Column, TableVersionHandle
+from pixeltable.exec.sql_node import OrderByClause, OrderByItem, combine_order_by_clauses, print_order_by_clause
+from pixeltable.func.iterator import GeneratingFunctionCall
+from pixeltable.query_clauses import FromClause, SampleClause
+
+if TYPE_CHECKING:
+    from pixeltable.io.data_sources import SqlDataSource
+
+
+def _is_agg_fn_call(e: exprs.Expr) -> bool:
+    return isinstance(e, exprs.FunctionCall) and e.is_agg_fn_call and not e.is_window_fn_call
+
+
+def _get_combined_ordering(
+    o1: list[tuple[exprs.Expr, bool]], o2: list[tuple[exprs.Expr, bool]]
+) -> list[tuple[exprs.Expr, bool]]:
+    """Returns an ordering that's compatible with both o1 and o2, or an empty list if no such ordering exists"""
+    result: list[tuple[exprs.Expr, bool]] = []
+    for (e1, asc1), (e2, asc2) in zip(o1, o2):
+        if e1.id != e2.id:
+            return []
+        if asc1 is not None and asc2 is not None and asc1 != asc2:
+            return []
+        asc = asc1 if asc1 is not None else asc2
+        result.append((e1, asc))
+
+    prefix_len = min(len(o1), len(o2))
+    if len(o1) > prefix_len:
+        result.extend(o1[prefix_len:])
+    elif len(o2) > prefix_len:
+        result.extend(o2[prefix_len:])
+    return result
+
+
+class Analyzer:
+    """
+    Performs semantic analysis of a query and stores the analysis state.
+    """
+
+    from_clause: FromClause
+    all_exprs: list[exprs.Expr]  # union of all exprs, aside from sql_where_clause
+    select_list: list[exprs.Expr]
+    group_by_clause: list[exprs.Expr] | None  # None for non-aggregate queries; [] for agg query w/o grouping
+    grouping_exprs: list[exprs.Expr]  # [] for non-aggregate queries or agg query w/o grouping
+    order_by_clause: OrderByClause
+    stratify_exprs: list[exprs.Expr]  # [] if no stratiifcation is required
+    sample_clause: SampleClause | None  # None if no sampling clause is present
+
+    sql_elements: exprs.SqlElementCache
+
+    # Where clause of the Select stmt of the SQL scan
+    sql_where_clause: exprs.Expr | None
+
+    # filter predicate applied to output rows of the SQL scan
+    filter: exprs.Expr | None
+
+    agg_fn_calls: list[exprs.FunctionCall]  # grouping aggregation (ie, not window functions)
+    window_fn_calls: list[exprs.FunctionCall]
+    agg_order_by: list[exprs.Expr]
+
+    def __init__(
+        self,
+        from_clause: FromClause,
+        select_list: Sequence[exprs.Expr],
+        where_clause: exprs.Expr | None = None,
+        group_by_clause: list[exprs.Expr] | None = None,
+        order_by_clause: list[tuple[exprs.Expr, bool]] | None = None,
+        sample_clause: SampleClause | None = None,
+    ):
+        if order_by_clause is None:
+            order_by_clause = []
+        self.from_clause = from_clause
+        self.sql_elements = exprs.SqlElementCache()
+
+        # remove references to unstored computed cols
+        self.select_list = [e.resolve_computed_cols() for e in select_list]
+        if where_clause is not None:
+            where_clause = where_clause.resolve_computed_cols()
+        self.group_by_clause = (
+            [e.resolve_computed_cols() for e in group_by_clause] if group_by_clause is not None else None
+        )
+        self.sample_clause = sample_clause
+        if self.sample_clause is not None and self.sample_clause.is_stratified:
+            self.stratify_exprs = [e.resolve_computed_cols() for e in sample_clause.stratify_exprs]
+        else:
+            self.stratify_exprs = []
+        self.order_by_clause = [OrderByItem(e.resolve_computed_cols(), asc) for e, asc in order_by_clause]
+
+        self.sql_where_clause = None
+        self.filter = None
+        if where_clause is not None:
+            where_clause_conjuncts, self.filter = where_clause.split_conjuncts(self.sql_elements.contains)
+            self.sql_where_clause = exprs.CompoundPredicate.make_conjunction(where_clause_conjuncts)
+
+        # all exprs that are evaluated in Python; not executable
+        self.all_exprs = self.select_list.copy()
+        for join_clause in from_clause.join_clauses:
+            if join_clause.join_predicate is not None:
+                self.all_exprs.append(join_clause.join_predicate)
+        if self.group_by_clause is not None:
+            self.all_exprs.extend(self.group_by_clause)
+        self.all_exprs.extend(self.stratify_exprs)
+        self.all_exprs.extend(e for e, _ in self.order_by_clause)
+        if self.filter is not None:
+            if sample_clause is not None:
+                raise excs.RequestError(
+                    excs.ErrorCode.UNSUPPORTED_OPERATION, f'Filter {self.filter} not expressible in SQL'
+                )
+            self.all_exprs.append(self.filter)
+
+        self.agg_order_by = []
+        self.agg_fn_calls = []
+        self.window_fn_calls = []
+        self._analyze_agg()
+        self.grouping_exprs = self.group_by_clause if self.group_by_clause is not None else []
+
+    def _analyze_agg(self) -> None:
+        """Check semantic correctness of aggregation and fill in agg-specific fields of Analyzer"""
+        candidates = self.select_list
+        agg_fn_calls = exprs.ExprSet(
+            exprs.Expr.list_subexprs(
+                candidates,
+                expr_class=exprs.FunctionCall,
+                filter=lambda e: bool(e.is_agg_fn_call and not e.is_window_fn_call),
+            )
+        )
+        self.agg_fn_calls = list(agg_fn_calls)
+        window_fn_calls = exprs.ExprSet(
+            exprs.Expr.list_subexprs(
+                candidates, expr_class=exprs.FunctionCall, filter=lambda e: bool(e.is_window_fn_call)
+            )
+        )
+        self.window_fn_calls = list(window_fn_calls)
+        if len(self.agg_fn_calls) == 0:
+            # nothing to do
+            return
+        # if we're doing grouping aggregation and don't have an explicit Group By clause, we're creating a single group
+        if self.group_by_clause is None:
+            self.group_by_clause = []
+
+        # check that select list only contains aggregate output
+        grouping_expr_ids = {e.id for e in self.group_by_clause}
+        is_agg_output = [self._determine_agg_status(e, grouping_expr_ids)[0] for e in self.select_list]
+        if is_agg_output.count(False) > 0:
+            raise excs.RequestError(
+                excs.ErrorCode.INVALID_EXPRESSION,
+                f'Invalid non-aggregate expression in aggregate query: {self.select_list[is_agg_output.index(False)]}',
+            )
+
+        # check that Where clause and filter doesn't contain aggregates
+        if self.sql_where_clause is not None and any(
+            _is_agg_fn_call(e) for e in self.sql_where_clause.subexprs(expr_class=exprs.FunctionCall)
+        ):
+            raise excs.RequestError(
+                excs.ErrorCode.INVALID_EXPRESSION,
+                f'where() cannot contain aggregate functions: {self.sql_where_clause}',
+            )
+        if self.filter is not None and any(
+            _is_agg_fn_call(e) for e in self.filter.subexprs(expr_class=exprs.FunctionCall)
+        ):
+            raise excs.RequestError(
+                excs.ErrorCode.INVALID_EXPRESSION, f'where() cannot contain aggregate functions: {self.filter}'
+            )
+
+        # check that grouping exprs don't contain aggregates and can be expressed as SQL (we perform sort-based
+        # aggregation and rely on the SqlScanNode returning data in the correct order)
+        for e in self.group_by_clause:
+            if not self.sql_elements.contains(e):
+                raise excs.RequestError(
+                    excs.ErrorCode.INVALID_EXPRESSION,
+                    f'Invalid grouping expression, needs to be expressible in SQL: {e}',
+                )
+            if e.contains_(filter=_is_agg_fn_call):
+                raise excs.RequestError(
+                    excs.ErrorCode.INVALID_EXPRESSION, f'Grouping expression contains aggregate function: {e}'
+                )
+
+    def _determine_agg_status(self, e: exprs.Expr, grouping_expr_ids: set[int]) -> tuple[bool, bool]:
+        """Determine whether expr is the input to or output of an aggregate function.
+        Returns:
+            (<is output>, <is input>)
+        """
+        if e.id in grouping_expr_ids:
+            return True, True
+        elif _is_agg_fn_call(e):
+            for c in e.components:
+                _, is_input = self._determine_agg_status(c, grouping_expr_ids)
+                if not is_input:
+                    raise excs.RequestError(excs.ErrorCode.INVALID_EXPRESSION, f'Invalid nested aggregates: {e}')
+            return True, False
+        elif isinstance(e, exprs.Literal):
+            return True, True
+        elif isinstance(e, (exprs.ColumnRef, exprs.RowidRef)):
+            # we already know that this isn't a grouping expr
+            return False, True
+        else:
+            # an expression such as <grouping expr 1> + <grouping expr 2> can both be the output and input of agg
+            assert len(e.components) > 0
+            component_is_output, component_is_input = zip(
+                *[self._determine_agg_status(c, grouping_expr_ids) for c in e.components]
+            )
+            is_output = component_is_output.count(True) == len(e.components)
+            is_input = component_is_input.count(True) == len(e.components)
+            if not is_output and not is_input:
+                raise excs.RequestError(
+                    excs.ErrorCode.INVALID_EXPRESSION, f'Invalid expression, mixes aggregate with non-aggregate: {e}'
+                )
+            return is_output, is_input
+
+    def finalize(self, row_builder: exprs.RowBuilder) -> None:
+        """Make all exprs executable
+        TODO: add EvalCtx for each expr list?
+        """
+        # maintain original composition of select list
+        row_builder.set_slot_idxs(self.select_list, remove_duplicates=False)
+        if self.group_by_clause is not None:
+            row_builder.set_slot_idxs(self.group_by_clause)
+        order_by_exprs = [e for e, _ in self.order_by_clause]
+        row_builder.set_slot_idxs(order_by_exprs)
+        row_builder.set_slot_idxs(self.all_exprs)
+        if self.filter is not None:
+            row_builder.set_slot_idxs([self.filter])
+        row_builder.set_slot_idxs(self.agg_fn_calls)
+        row_builder.set_slot_idxs(self.agg_order_by)
+
+    def get_window_fn_ob_clause(self) -> OrderByClause | None:
+        clause: list[OrderByClause] = []
+        for fn_call in self.window_fn_calls:
+            # window functions require ordering by the group_by/order_by clauses
+            group_by_exprs, order_by_exprs = fn_call.get_window_sort_exprs()
+            clause.append(
+                [OrderByItem(e, None) for e in group_by_exprs] + [OrderByItem(e, True) for e in order_by_exprs]
+            )
+        return combine_order_by_clauses(clause)
+
+    def has_agg(self) -> bool:
+        """True if there is any kind of aggregation in the query"""
+        return self.group_by_clause is not None or len(self.agg_fn_calls) > 0 or len(self.window_fn_calls) > 0
+
+
+class Planner:
+    @classmethod
+    def create_insert_plan(
+        cls, tbl: catalog.TableVersion, source: list[dict[str, Any]] | SqlDataSource, ignore_errors: bool
+    ) -> exec.ExecNode:
+        """Creates a plan for TableVersion.insert() from either in-memory rows or a SqlDataSource."""
+        assert not tbl.is_view
+        output_cols = cls._compute_output_cols(tbl, for_insert=True)
+        assert len(output_cols) > 0
+        cls.__check_valid_columns(tbl, output_cols, 'inserted into')
+
+        row_builder = exprs.RowBuilder([], output_cols, [], tbl)
+        plan, batch_size = cls._create_input_plan(tbl, source, row_builder)
+        computed_exprs = row_builder.output_exprs - row_builder.input_exprs
+        if len(computed_exprs) > 0:
+            plan = exec.ExprEvalNode(
+                row_builder, computed_exprs, plan.output_exprs, input=plan, maintain_input_order=False
+            )
+
+        stored_cols = [c for c in tbl.cols_by_id.values() if c.is_stored]
+        if any(c.col_type.needs_cell_materialization() for c in stored_cols):
+            plan = exec.CellMaterializationNode(plan)
+        plan.set_ctx(exec.ExecContext(plan.row_builder, batch_size=batch_size, ignore_errors=ignore_errors))
+        plan = cls._add_save_node(plan)
+        return plan
+
+    @classmethod
+    def _compute_output_cols(cls, tbl: catalog.TableVersion, for_insert: bool) -> list[Column]:
+        """Returns the columns of tbl to materialize when computing new rows for it.
+
+        If for_insert == True, only stored columns, incl. index value columns.
+        If for_insert == False, all columns except index value columns and undo columns.
+        """
+        if for_insert:
+            return [c for c in tbl.cols_by_id.values() if c.is_stored]
+        # for compute(), skip index val/undo cols
+        skipped_col_ids = {c.id for idx_info in tbl.idxs.values() for c in idx_info.columns}
+        return [c for c in tbl.cols_by_id.values() if c.id not in skipped_col_ids]
+
+    @classmethod
+    def _create_input_plan(
+        cls,
+        tbl: catalog.TableVersion,
+        source: list[dict[str, Any]] | SqlDataSource,
+        row_builder: exprs.RowBuilder,
+        set_pk: bool = False,
+    ) -> tuple[exec.ExecNode, int]:
+        """
+        Creates the input stage shared by insert/compute plans: materializes 'source' (in-memory rows or a
+        SqlDataSource, containing values for the mutable columns of 'tbl'), plus a prefetch node for media
+        inputs. Returns the plan and its exec batch size.
+        """
+        from pixeltable.io.data_sources import SqlDataSource
+
+        plan: exec.ExecNode
+        batch_size: int
+        if isinstance(source, SqlDataSource):
+            plan = exec.SqlDataNode(tbl.handle, source, row_builder)
+            batch_size = 1024
+        else:
+            assert isinstance(source, list)
+            plan = exec.InMemoryDataNode(tbl.handle, source, row_builder, set_pk=set_pk)
+            batch_size = 0
+
+        plan = cls._add_prefetch_node(tbl.id, row_builder.input_exprs, input_node=plan)
+        return plan, batch_size
+
+    @classmethod
+    def create_compute_plan(
+        cls, path: catalog.TableVersionPath, rows: list[dict[str, Any]], ignore_errors: bool
+    ) -> exec.ExecNode:
+        """Creates a plan for LocalTable.compute(): propagation of input rows along the entire view chain.
+
+        Plan shape:
+        - the input rows are handled identically to insert:
+            - InMemoryDataNode
+            - PrefetchNode
+        - each table in 'path' adds its incremental nodes:
+            - ExprEvalNode + FilterNode for view predicate enforcement
+            - ComponentIterationNode for component views
+            - ExprEvalNode to materialize computed columns, if any
+        """
+        tvs = list(reversed(path.get_tbl_versions()))  # base first
+        base_tv = tvs[0].get()
+        assert base_tv.is_insertable
+
+        # columns to materialize, base to target; each level's columns are computed at that level's stage
+        per_tbl_output_cols: list[list[Column]] = []
+        for tvh in tvs:
+            tv = tvh.get()
+            cols = cls._compute_output_cols(tv, for_insert=False)
+            cls.__check_valid_columns(tv, cols, 'computed for')
+            cls.__check_valid_iterator(tv, tv.iterator_call, 'computed for')
+            per_tbl_output_cols.append(cols)
+        all_cols = [col for cols in per_tbl_output_cols for col in cols]
+
+        # view predicates and iterator args aren't column values; they need to be recorded explicitly
+        extra_exprs: list[exprs.Expr] = []
+        for tvh in tvs[1:]:
+            tv = tvh.get()
+            if tv.predicate is not None:
+                extra_exprs.append(tv.predicate)
+            if tv.is_component_view:
+                extra_exprs.append(tv.iterator_args_expr())
+        row_builder = exprs.RowBuilder(extra_exprs, all_cols, [], path.tbl_version.get(), allow_unstored=True)
+
+        resolve_cols = set(all_cols)
+
+        def recorded(e: exprs.Expr) -> exprs.Expr:
+            """Return the RowBuilder's recorded form of e."""
+            result = row_builder.unique_exprs[e.copy().resolve_computed_cols(resolve_cols=resolve_cols)]
+            assert result is not None
+            return result
+
+        plan, _ = cls._create_input_plan(base_tv, rows, row_builder, set_pk=True)
+        # the plan preserves input row order (all ExprEvalNodes maintain input order), so output rows map
+        # positionally to input rows; avail: exprs whose slots are materialized so far
+        materialized = exprs.ExprSet(row_builder.input_exprs)
+        for tvh, output_cols in zip(tvs, per_tbl_output_cols):
+            tv = tvh.get()
+            if tv.is_view:
+                if tv.predicate is not None:
+                    pred = recorded(tv.predicate)
+                    if pred not in materialized:
+                        plan = exec.ExprEvalNode(row_builder, [pred], list(materialized), input=plan)
+                        materialized.add(pred)
+                    plan = exec.FilterNode(row_builder, pred, plan)
+                if tv.is_component_view:
+                    iterator_args = cast(exprs.InlineDict, recorded(tv.iterator_args_expr()))
+                    plan = exec.ComponentIterationNode(tvh, plan, iterator_args=iterator_args)
+
+            output_col_exprs: list[exprs.Expr] = []
+            for output_col in output_cols:
+                slot_idx = row_builder.table_columns[output_col]
+                output_col_exprs.append(row_builder.unique_exprs[slot_idx])
+            assert all(e is not None for e in output_col_exprs)
+            missing_output_exprs = exprs.ExprSet(e for e in output_col_exprs if e not in materialized)
+            if len(missing_output_exprs) > 0:
+                plan = exec.ExprEvalNode(row_builder, list(missing_output_exprs), list(materialized), input=plan)
+                materialized.update(missing_output_exprs)
+
+        plan.set_ctx(exec.ExecContext(row_builder, batch_size=0, ignore_errors=ignore_errors))
+        return plan
+
+    @classmethod
+    def rowid_columns(cls, target: TableVersionHandle, num_rowid_cols: int | None = None) -> list[exprs.Expr]:
+        """Return list of RowidRef for the given number of associated rowids"""
+        if num_rowid_cols is None:
+            num_rowid_cols = target.get().num_rowid_columns()
+        return [exprs.RowidRef(target, i) for i in range(num_rowid_cols)]
+
+    @classmethod
+    def create_query_insert_plan(
+        cls, tbl: catalog.TableVersion, query: 'pxt.Query', ignore_errors: bool
+    ) -> exec.ExecNode:
+        assert not tbl.is_view
+        # The compiled plan owns the planner-mutated select-list exprs (with slot_idx assigned).
+        # Read schema and exprs from the plan, not from the Query (whose _select_list_exprs are
+        # the pre-compile copies and don't carry slot_idx).
+        compiled = query._create_query_plan()
+        plan: exec.ExecNode = compiled.exec_root
+
+        needs_cell_materialization = False
+        for col_name, expr in zip(compiled.select_list_schema.keys(), compiled.select_list_exprs):
+            assert col_name in tbl.cols_by_name
+            col = tbl.cols_by_name[col_name]
+            plan.row_builder.add_table_column(col, expr.slot_idx)
+            needs_cell_materialization = needs_cell_materialization or col.col_type.needs_cell_materialization()
+
+        if needs_cell_materialization:
+            plan = exec.CellMaterializationNode(plan)
+
+        plan.set_ctx(exec.ExecContext(plan.row_builder, batch_size=0, ignore_errors=ignore_errors))
+
+        return plan
+
+    @classmethod
+    def _build_update_columns(
+        cls, target: catalog.TableVersion, updated_cols: set[Column], recomputed_cols: set[Column]
+    ) -> tuple[list[Column], list[exprs.Expr], list[Column]]:
+        """Classifies columns for an update plan and builds recomputed/remap expressions.
+
+        Mutates `recomputed_cols` in-place (adds changed index val cols, removes non-stored).
+
+        Returns:
+            - evaluated_cols: recomputed + remap columns (parallel with select_list)
+            - select_list: resolved exprs for evaluated_cols
+            - identity_cols: unchanged stored columns
+        """
+        # The logic here assumes that every index with a value column also has an undo column. It needs to be updated
+        # when that is no longer true.
+        assert all(info.undo_col is not None for info in target.idxs.values() if info.val_col is not None)
+
+        # We always need to update all indices on any updated/recomputed column
+        modified_base_cols = {c for c in updated_cols | recomputed_cols if c.get_tbl().id == target.id}
+        modified_val_cols = target.get_idx_val_columns(modified_base_cols)
+        recomputed_cols |= modified_val_cols
+
+        # Building exclude lists for non-identity cols
+        unmodified_val_cols = target.idx_val_cols - modified_val_cols
+
+        # we only need to recompute stored columns (unstored ones are substituted away)
+        recomputed_cols -= {c for c in recomputed_cols if not c.is_stored}
+        recomputed_base_cols = {col for col in recomputed_cols if col.get_tbl().id == target.id}
+
+        excluded = updated_cols | recomputed_cols | target.idx_undo_cols | unmodified_val_cols
+        identity_cols = [col for col in target.cols_by_id.values() if col.is_stored and col not in excluded]
+
+        evaluated_cols: list[Column] = []
+        select_list: list[exprs.Expr] = []
+
+        recomputed_exprs = [
+            c.value_expr.copy().resolve_computed_cols(resolve_cols=recomputed_base_cols) for c in recomputed_base_cols
+        ]
+        # recomputed cols reference the new values of the updated cols
+        evaluated_cols.extend(recomputed_base_cols)
+        select_list.extend(recomputed_exprs)
+
+        # Mapping undo columns into corresponding value columns
+        for info in target.idxs.values():
+            if info.val_col in unmodified_val_cols:
+                evaluated_cols.append(info.val_col)
+                select_list.append(exprs.ColumnRef(info.undo_col.column_version_md()))
+
+        return evaluated_cols, select_list, identity_cols
+
+    @classmethod
+    def create_update_plan(
+        cls,
+        tbl: catalog.TableVersionPath,
+        update_targets: dict[catalog.Column, exprs.Expr],
+        recompute_targets: list[catalog.Column],
+        cascade: bool,
+    ) -> tuple[exec.ExecNode, list[str], list[catalog.Column]]:
+        """Creates a plan to materialize updated rows.
+
+        The plan:
+        - retrieves rows that are visible at the current version of the table
+        - materializes all stored columns and the update targets
+        - if cascade is True, recomputes all computed columns that transitively depend on the updated columns
+          and copies the values of all other stored columns
+        - if cascade is False, copies all columns that aren't update targets from the original rows
+
+        Returns:
+            - root node of the plan
+            - list of qualified column names that are getting updated
+            - list of user-visible columns that are being recomputed
+        """
+        # retrieve all stored cols and all target exprs
+        assert isinstance(tbl, catalog.TableVersionPath)
+        # Either we are doing an update or recompute, but not both
+        assert len(update_targets) == 0 or len(recompute_targets) == 0
+
+        target = tbl.tbl_version.get()  # the one we need to update
+        # Updated cols are columns for which a new value is explicitly provided
+        # Recomputed cols are columns for which we need to compute a new value (not necessarily due to upstream change)
+        updated_cols = set(update_targets.keys())
+        recomputed_cols = set(recompute_targets)
+        if cascade:
+            recomputed_cols |= target.get_dependent_columns(updated_cols | recomputed_cols)
+
+        eval_cols, eval_exprs, identity_cols = cls._build_update_columns(target, updated_cols, recomputed_cols)
+
+        cls.__check_valid_columns(target, recomputed_cols, 'updated in')
+
+        # Substitute update target exprs into recomputed exprs before building select_list
+        spec = exprs.ExprDict[exprs.Expr](
+            (exprs.ColumnRef(col.column_version_md()), e) for col, e in update_targets.items()
+        )
+        exprs.Expr.list_substitute(eval_exprs, spec)
+        evaluated_cols: list[Column] = list(update_targets.keys()) + eval_cols
+        select_list: list[exprs.Expr] = list(update_targets.values()) + eval_exprs
+
+        # Read from rows that were just deleted (expired) at the current version.
+        # The where clause was already applied during deletion; delete_rows() nullifies index value columns,
+        # which would cause the where clause to fail on the expired rows.
+        plan = cls.create_query_plan(
+            FromClause(tbls=[tbl]),
+            select_list=select_list,
+            columns=identity_cols,
+            ignore_errors=True,
+            deleted_at_current_version=[tbl.tbl_version],
+        )
+
+        # Register output columns with the row builder
+        plan.row_builder.add_table_columns(identity_cols)
+        for i, col in enumerate(evaluated_cols):
+            plan.row_builder.add_table_column(col, select_list[i].slot_idx)
+
+        plan = cls._add_cell_materialization_node(plan)
+        plan = cls._add_save_node(plan)
+
+        recomputed_user_cols = [c for c in recomputed_cols if c.name is not None]
+        return (
+            plan,
+            [f'{c.get_tbl().name}.{c.name}' for c in list(update_targets.keys()) + recomputed_user_cols],
+            recomputed_user_cols,
+        )
+
+    @classmethod
+    def __check_valid_columns(
+        cls,
+        tbl: catalog.TableVersion,
+        cols: Iterable[Column],
+        op_name: Literal['inserted into', 'updated in', 'computed for'],
+    ) -> None:
+        for col in cols:
+            if col.value_expr is not None and not col.value_expr.is_valid:
+                raise excs.RequestError(
+                    excs.ErrorCode.INVALID_STATE,
+                    dedent(
+                        f"""
+                        Data cannot be {op_name} the {tbl.display_str()},
+                        because the column {col.name!r} is currently invalid:
+                        {{validation_error}}
+                        """
+                    )
+                    .strip()
+                    .format(validation_error=col.value_expr.validation_error),
+                )
+
+    @classmethod
+    def __check_valid_iterator(
+        cls,
+        tbl: catalog.TableVersion,
+        iterator: GeneratingFunctionCall | None,
+        op_name: Literal['updated in', 'computed for'],
+    ) -> None:
+        if iterator is None:
+            return
+
+        if not iterator.is_valid:
+            raise excs.RequestError(
+                excs.ErrorCode.INVALID_STATE,
+                dedent(
+                    f"""
+                    Data cannot be {op_name} the {tbl.display_str()},
+                    because the iterator defined on {tbl.name!r} is currently invalid:
+                    {{validation_error}}
+                    """
+                )
+                .strip()
+                .format(validation_error=iterator.validation_error),
+            )
+
+    @classmethod
+    def _cell_md_col_refs(cls, expr_list: Iterable[exprs.Expr]) -> list[exprs.ColumnRef]:
+        """Return list of ColumnRefs that need their cellmd values for reconstruction"""
+        json_col_refs = list(
+            exprs.Expr.list_subexprs(
+                expr_list,
+                expr_class=exprs.ColumnRef,
+                filter=lambda e: cast(exprs.ColumnRef, e).col.col_type.is_json_type(),
+                traverse_matches=False,
+            )
+        )
+
+        def needs_reconstruction(e: exprs.Expr) -> bool:
+            assert isinstance(e, exprs.ColumnRef)
+            # Vector-typed array columns are used for vector indexes, and are stored in the db
+            return e.col.col_type.is_array_type() and not e.col.has_sa_vector_type()
+
+        array_col_refs = list(
+            exprs.Expr.list_subexprs(
+                expr_list, expr_class=exprs.ColumnRef, filter=needs_reconstruction, traverse_matches=False
+            )
+        )
+
+        binary_col_refs = list(
+            exprs.Expr.list_subexprs(
+                expr_list,
+                expr_class=exprs.ColumnRef,
+                filter=lambda e: cast(exprs.ColumnRef, e).col.col_type.is_binary_type(),
+                traverse_matches=False,
+            )
+        )
+
+        return json_col_refs + array_col_refs + binary_col_refs
+
+    @classmethod
+    def _add_cell_materialization_node(cls, input: exec.ExecNode) -> exec.ExecNode:
+        # we need a CellMaterializationNode if any of the evaluated output columns are json or array-typed
+        has_target_cols = any(
+            col.col_type.needs_cell_materialization()
+            for col, slot_idx in input.row_builder.table_columns.items()
+            if slot_idx is not None
+        )
+        if has_target_cols:
+            return exec.CellMaterializationNode(input)
+        else:
+            return input
+
+    @classmethod
+    def _add_cell_reconstruction_node(cls, expr_list: list[exprs.Expr], input: exec.ExecNode) -> exec.ExecNode:
+        """
+        Add a CellReconstructionNode, if required by any of the exprs in expr_list.
+
+        Cell reconstruction is required for
+        1) all json-typed ColumnRefs that are not used as part of a JsonPath (the latter does its own reconstruction)
+           or as part of a ColumnPropertyRef
+        2) all array-typed ColumnRefs that are not used as part of a ColumnPropertyRef
+        """
+
+        def json_filter(e: exprs.Expr) -> bool:
+            if isinstance(e, exprs.JsonPath):
+                return isinstance(e.anchor, exprs.ColumnRef)
+            if isinstance(e, exprs.ColumnPropertyRef):
+                return e.col_ref.col.col_type.is_json_type()
+            return isinstance(e, exprs.ColumnRef) and e.col.col_type.is_json_type()
+
+        def array_filter(e: exprs.Expr) -> bool:
+            if isinstance(e, exprs.ColumnPropertyRef):
+                return e.col_ref.col.col_type.is_array_type()
+            if not isinstance(e, exprs.ColumnRef):
+                return False
+            # Vector-typed array columns are used for vector indexes, and are stored in the db
+            return e.col.col_type.is_array_type() and not e.col.has_sa_vector_type()
+
+        def binary_filter(e: exprs.Expr) -> bool:
+            return isinstance(e, exprs.ColumnRef) and e.col.col_type.is_binary_type()
+
+        json_candidates = list(exprs.Expr.list_subexprs(expr_list, filter=json_filter, traverse_matches=False))
+        json_refs = [e for e in json_candidates if isinstance(e, exprs.ColumnRef)]
+        array_candidates = list(exprs.Expr.list_subexprs(expr_list, filter=array_filter, traverse_matches=False))
+        array_refs = [e for e in array_candidates if isinstance(e, exprs.ColumnRef)]
+        binary_refs = list(
+            exprs.Expr.list_subexprs(expr_list, exprs.ColumnRef, filter=binary_filter, traverse_matches=False)
+        )
+        if len(json_refs) > 0 or len(array_refs) > 0 or len(binary_refs) > 0:
+            return exec.CellReconstructionNode(json_refs, array_refs, binary_refs, input.row_builder, input=input)
+        else:
+            return input
+
+    @classmethod
+    def create_batch_update_plan(
+        cls,
+        tbl: catalog.TableVersionPath,
+        batch: list[dict[catalog.Column, exprs.Expr]],
+        rowids: list[tuple[int, ...]],
+        cascade: bool,
+    ) -> tuple[exec.ExecNode, exec.RowUpdateNode, sql.ColumnElement[bool], list[catalog.Column], list[catalog.Column]]:
+        """
+        Returns:
+        - root node of the plan to produce the updated rows
+        - RowUpdateNode of plan
+        - Where clause for deleting the current versions of updated rows
+        - list of columns that are getting updated
+        - list of user-visible columns that are being recomputed
+        """
+        assert isinstance(tbl, catalog.TableVersionPath)
+        target = tbl.tbl_version.get()  # the one we need to update
+        sa_key_cols: list[sql.Column]
+        key_vals: list[tuple]
+        if len(rowids) > 0:
+            sa_key_cols = target.store_tbl.rowid_columns()
+            key_vals = rowids
+        else:
+            pk_cols = target.primary_key_columns()
+            sa_key_cols = [c.sa_col for c in pk_cols]
+            key_vals = [tuple(row[col].val for col in pk_cols) for row in batch]
+
+        # retrieve all stored cols and all target exprs
+        updated_cols = batch[0].keys() - target.primary_key_columns()
+        recomputed_cols = target.get_dependent_columns(updated_cols) if cascade else set()
+
+        eval_cols, eval_exprs, identity_cols = cls._build_update_columns(target, updated_cols, recomputed_cols)
+
+        # Materialize as a list once for stable iteration order across parallel lists
+        updated_cols_list = list(updated_cols)
+        # Prepend updated cols as ColumnRefs (RowUpdateNode modifies them in-place; no further substitution needed)
+        evaluated_cols: list[Column] = updated_cols_list + eval_cols
+        select_list: list[exprs.Expr] = [
+            exprs.ColumnRef(col.column_version_md()) for col in updated_cols_list
+        ] + eval_exprs
+
+        # ExecNode tree (from bottom to top):
+        # - SqlLookupNode to retrieve the existing rows
+        # - RowUpdateNode to update the retrieved rows
+        # - ExprEvalNode to evaluate the remaining output exprs
+        analyzer = Analyzer(FromClause(tbls=[tbl]), select_list)
+        all_sql_exprs = list(
+            exprs.Expr.list_subexprs(analyzer.all_exprs, filter=analyzer.sql_elements.contains, traverse_matches=False)
+        )
+        # Exclude recomputed-column expressions from sql_exprs: they must be re-evaluated by
+        # ExprEvalNode in Python after RowUpdateNode writes the new column values into the slots,
+        # not by SQL against the old row values that SqlLookupNode reads.
+        # Undo-col remapping expressions (eval_cols not in recomputed_cols) stay in sql_exprs.
+        recomputed_expr_ids = {expr.id for col, expr in zip(eval_cols, eval_exprs) if col in recomputed_cols}
+        sql_exprs = [e for e in all_sql_exprs if e.id not in recomputed_expr_ids]
+        row_builder = exprs.RowBuilder(analyzer.all_exprs, [], sql_exprs, target)
+        analyzer.finalize(row_builder)
+
+        cell_md_col_refs = cls._cell_md_col_refs(sql_exprs)
+        sql_lookup_node = exec.SqlLookupNode(
+            tbl,
+            row_builder,
+            sql_exprs,
+            columns=identity_cols,
+            sa_key_cols=sa_key_cols,
+            key_vals=key_vals,
+            cell_md_col_refs=cell_md_col_refs,
+            deleted_at_current_version=[tbl.tbl_version],
+        )
+        col_vals = [{col: row[col].val for col in updated_cols} for row in batch]
+        row_update_node = exec.RowUpdateNode(tbl, key_vals, len(rowids) > 0, col_vals, row_builder, sql_lookup_node)
+        plan: exec.ExecNode = row_update_node
+        if not cls._is_contained_in(analyzer.select_list, sql_exprs):
+            # we need an ExprEvalNode to evaluate the remaining output exprs
+            plan = exec.ExprEvalNode(row_builder, analyzer.select_list, sql_exprs, input=plan)
+
+        # Register output columns with the row builder
+        row_builder.set_slot_idxs(select_list, remove_duplicates=False)
+        plan.row_builder.add_table_columns(identity_cols)
+        for i, col in enumerate(evaluated_cols):
+            plan.row_builder.add_table_column(col, select_list[i].slot_idx)
+        ctx = exec.ExecContext(row_builder)
+        # TODO: correct batch size?
+        ctx.batch_size = 0
+        plan.set_ctx(ctx)
+
+        plan = cls._add_cell_materialization_node(plan)
+        plan = cls._add_save_node(plan)
+        recomputed_user_cols = [c for c in recomputed_cols if c.name is not None]
+        return (
+            plan,
+            row_update_node,
+            sql_lookup_node.where_clause_element,
+            updated_cols_list + recomputed_user_cols,
+            recomputed_user_cols,
+        )
+
+    @classmethod
+    def create_view_update_plan(
+        cls, view: catalog.TableVersionPath, recompute_targets: list[catalog.Column]
+    ) -> exec.ExecNode:
+        """Creates a plan to materialize updated rows for a view, given that the base table has been updated.
+        The plan:
+        - retrieves rows that are visible at the current version of the table and satisfy the view predicate
+        - materializes all stored columns and the update targets
+
+        TODO: unify with create_view_load_plan()
+
+        Returns:
+            - root node of the plan
+            - list of qualified column names that are getting updated
+            - list of columns that are being recomputed
+        """
+        assert isinstance(view, catalog.TableVersionPath)
+        assert view.is_view
+        target = view.tbl_version.get()
+        recomputed_cols = set(recompute_targets)
+
+        eval_cols, eval_exprs, identity_cols = cls._build_update_columns(target, set(), recomputed_cols)
+        # Identity columns are all other stored columns that aren't being recomputed
+        # and go through select_list as ColumnRefs (no separate columns= path) unlike other update plans
+        evaluated_cols: list[Column] = identity_cols + eval_cols
+        select_list: list[exprs.Expr] = [exprs.ColumnRef(c.column_version_md()) for c in identity_cols] + eval_exprs
+
+        # Read the just-expired rows (v_max == current_version) to copy stored column values
+        plan = cls.create_query_plan(
+            FromClause(tbls=[view]),
+            select_list,
+            where_clause=target.predicate,
+            ignore_errors=True,
+            created_at_current_version=view.get_bases(),
+            deleted_at_current_version=[view.tbl_version],
+        )
+        # Register output columns with the row builder
+        for i, col in enumerate(evaluated_cols):
+            plan.row_builder.add_table_column(col, select_list[i].slot_idx)
+        plan = cls._add_cell_materialization_node(plan)
+        plan = cls._add_save_node(plan)
+
+        return plan
+
+    @classmethod
+    def create_view_load_plan(
+        cls, view: catalog.TableVersionPath, propagates_insert: bool = False, exclude_existing_rows: bool = False
+    ) -> exec.ExecNode:
+        """Creates a query plan for populating a view.
+
+        Args:
+            view: the view to populate
+            propagates_insert: if True, we're propagating a base update to this view
+            exclude_existing_rows: if True, skip base rows for which the view already has a row that was deleted at
+                the view's current version
+
+        Returns:
+            - root node of the plan
+        """
+        assert isinstance(view, catalog.TableVersionPath)
+        assert view.is_view
+        # things we need to materialize as DataRows:
+        # 1. stored computed cols
+        # - iterator columns are effectively computed, just not with a value_expr
+        # - we can ignore stored non-computed columns because they have a default value that is supplied directly by
+        #   the store
+        target = view.tbl_version.get()  # the one we need to populate
+        stored_cols = [c for c in target.cols_by_id.values() if c.is_stored]
+        cls.__check_valid_columns(target, stored_cols, 'updated in')
+        cls.__check_valid_iterator(target, target.iterator_call, 'updated in')
+
+        # 2. for component views: iterator args
+        iterator_args = [target.iterator_args_expr()] if target.is_component_view else []
+
+        from_clause = FromClause(tbls=[view.base])
+        base_analyzer = Analyzer(
+            from_clause, iterator_args, where_clause=target.predicate, sample_clause=target.sample_clause
+        )
+        row_builder = exprs.RowBuilder(base_analyzer.all_exprs, stored_cols, [], target, for_view_load=True)
+
+        # if we're propagating an insert, we only want to see those base rows that were created for the current version
+        # execution plan:
+        # 1. materialize exprs computed from the base that are needed for stored view columns
+        # 2. if it's an iterator view, expand the base rows into component rows
+        # 3. materialize stored view columns that haven't been produced by step 1
+        base_output_exprs = exprs.ExprSet(
+            # e.is_deterministic: we cannot evaluate calls to nondeterministic functions before the iterator
+            # expansion, otherwise we'll see invalid duplicates
+            [e for e in row_builder.default_eval_ctx.exprs if e.is_bound_by([view.base]) and e.is_deterministic]
+        )
+        view_output_exprs = [e for e in row_builder.default_eval_ctx.target_exprs if e not in base_output_exprs]
+
+        # Create a new analyzer reflecting exactly what is required from the base table
+        base_analyzer = Analyzer(
+            from_clause, list(base_output_exprs), where_clause=target.predicate, sample_clause=target.sample_clause
+        )
+        base_analyzer.finalize(row_builder)
+        base_eval_ctx = row_builder.create_eval_ctx(base_analyzer.all_exprs)
+        plan = cls._create_query_plan(
+            row_builder=row_builder,
+            analyzer=base_analyzer,
+            eval_ctx=base_eval_ctx,
+            with_pk=True,
+            created_at_current_version=view.get_bases() if propagates_insert else [],
+            exclude_deleted_at_current_version=view.tbl_version if exclude_existing_rows else None,
+        )
+        exec_ctx = plan.ctx
+        if target.is_component_view:
+            plan = exec.ComponentIterationNode(view.tbl_version, plan)
+        if len(view_output_exprs) > 0:
+            plan = exec.ExprEvalNode(
+                row_builder, output_exprs=view_output_exprs, input_exprs=base_output_exprs, input=plan
+            )
+
+        exec_ctx.ignore_errors = True
+        plan.set_ctx(exec_ctx)
+        if any(c.col_type.needs_cell_materialization() for c in stored_cols):
+            plan = exec.CellMaterializationNode(plan)
+        plan = cls._add_save_node(plan)
+
+        return plan
+
+    @classmethod
+    def _verify_join_clauses(cls, analyzer: Analyzer) -> None:
+        """Verify that join clauses are expressible in SQL"""
+        for join_clause in analyzer.from_clause.join_clauses:
+            if join_clause.join_predicate is not None and analyzer.sql_elements.get(join_clause.join_predicate) is None:
+                raise excs.RequestError(
+                    excs.ErrorCode.UNSUPPORTED_OPERATION,
+                    f'Join predicate {join_clause.join_predicate} not expressible in SQL',
+                )
+
+    @classmethod
+    def _create_combined_ordering(cls, analyzer: Analyzer, verify_agg: bool) -> OrderByClause | None:
+        """Verify that the various ordering requirements don't conflict and return a combined ordering"""
+        ob_clauses: list[OrderByClause] = [analyzer.order_by_clause.copy()]
+
+        if verify_agg:
+            ordering: OrderByClause
+            for fn_call in analyzer.window_fn_calls:
+                # window functions require ordering by the group_by/order_by clauses
+                gb, ob = fn_call.get_window_sort_exprs()
+                ordering = [OrderByItem(e, None) for e in gb] + [OrderByItem(e, True) for e in ob]
+                ob_clauses.append(ordering)
+            for fn_call in analyzer.agg_fn_calls:
+                # agg functions with an ordering requirement are implicitly ascending
+                ordering = [OrderByItem(e, None) for e in analyzer.group_by_clause] + [
+                    OrderByItem(e, True) for e in fn_call.get_agg_order_by()
+                ]
+                ob_clauses.append(ordering)
+
+        if len(ob_clauses) == 0:
+            return None
+        elif len(ob_clauses) == 1:
+            return ob_clauses[0]
+
+        combined_ordering = ob_clauses[0]
+        for ordering in ob_clauses[1:]:
+            combined = combine_order_by_clauses([combined_ordering, ordering])
+            if combined is None:
+                raise excs.RequestError(
+                    excs.ErrorCode.UNSUPPORTED_OPERATION,
+                    f'Incompatible ordering requirements: '
+                    f'{print_order_by_clause(combined_ordering)} vs {print_order_by_clause(ordering)}',
+                )
+            combined_ordering = combined
+        return combined_ordering
+
+    @classmethod
+    def _add_save_node(cls, input_node: exec.ExecNode) -> exec.ExecNode:
+        """Add an ObjectStoreSaveNode, if needed."""
+        media_col_info = input_node.row_builder.media_output_col_info
+        if len(media_col_info) == 0:
+            return input_node
+        else:
+            return exec.ObjectStoreSaveNode(media_col_info, input_node)
+
+    @classmethod
+    def _is_contained_in(cls, l1: Iterable[exprs.Expr], l2: Iterable[exprs.Expr]) -> bool:
+        """Returns True if l1 is contained in l2"""
+        return {e.id for e in l1} <= {e.id for e in l2}
+
+    @classmethod
+    def _add_prefetch_node(
+        cls, tbl_id: UUID, expressions: Iterable[exprs.Expr], input_node: exec.ExecNode
+    ) -> exec.ExecNode:
+        """Add a CachePrefetch node, if needed."""
+        # we prefetch external files for all media ColumnRefs, even those that aren't part of the dependencies
+        # of output_exprs: if unstored iterator columns are present, we might need to materialize ColumnRefs that
+        # aren't explicitly captured as dependencies
+        media_col_refs = [e for e in expressions if isinstance(e, exprs.ColumnRef) and e.col_type.is_media_type()]
+        if len(media_col_refs) == 0:
+            return input_node
+        # we need to prefetch external files for media column types
+        file_col_info = [exprs.ColumnSlotIdx(e.col, e.slot_idx) for e in media_col_refs]
+        prefetch_node = exec.CachePrefetchNode(tbl_id, file_col_info, input_node)
+        return prefetch_node
+
+    @classmethod
+    def create_query_plan(
+        cls,
+        from_clause: FromClause,
+        select_list: list[exprs.Expr] | None = None,
+        columns: list[catalog.Column] | None = None,
+        where_clause: exprs.Expr | None = None,
+        group_by_clause: list[exprs.Expr] | None = None,
+        order_by_clause: list[tuple[exprs.Expr, bool]] | None = None,
+        limit: exprs.Expr | None = None,
+        offset: exprs.Expr | None = None,
+        sample_clause: SampleClause | None = None,
+        ignore_errors: bool = False,
+        created_at_current_version: list[catalog.TableVersionHandle] | None = None,
+        deleted_at_current_version: list[catalog.TableVersionHandle] | None = None,
+    ) -> exec.ExecNode:
+        """
+        Return plan for executing a query.
+
+        The plan:
+        - materializes the values of select_list exprs into their respective slots
+        - materializes cell values of 'columns' (and their cellmd, if applicable) into DataRow.cell_vals/cell_md
+
+        Updates 'select_list' in place to make it executable.
+        TODO: make created_at_current_version a flag and use the versions from tbl
+        """
+        if select_list is None:
+            select_list = []
+        if columns is None:
+            columns = []
+        if order_by_clause is None:
+            order_by_clause = []
+        if created_at_current_version is None:
+            created_at_current_version = []
+        if deleted_at_current_version is None:
+            deleted_at_current_version = []
+
+        # Plan compilation mutates expr state (slot_idx, bind_rel_paths). Deepcopy the inputs
+        # so the planner mutates copies, not the caller's state. TVHs/TVPs nested inside are
+        # thread-safe and structurally immutable (their __deepcopy__ returns self), so this is
+        # cheap. select_list is updated in place at the end (clear/extend) so callers receive
+        # the planned exprs.
+        select_list[:] = [copy.deepcopy(e) for e in select_list]
+        where_clause = copy.deepcopy(where_clause)
+        group_by_clause = copy.deepcopy(group_by_clause)
+        order_by_clause = copy.deepcopy(order_by_clause)
+        limit = copy.deepcopy(limit)
+        offset = copy.deepcopy(offset)
+        sample_clause = copy.deepcopy(sample_clause)
+        for item in select_list:
+            item.bind_rel_paths()
+
+        analyzer = Analyzer(
+            from_clause,
+            select_list,
+            where_clause=where_clause,
+            group_by_clause=group_by_clause,
+            order_by_clause=order_by_clause,
+            sample_clause=sample_clause,
+        )
+        # If the from_clause has a single table, we can use it as the context table for the RowBuilder.
+        # Otherwise there is no context table, but that's ok, because the context table is only needed for
+        # table mutations, which can't happen during a join.
+        context_tbl = (
+            from_clause.tbls[0].tbl_version.get()
+            if len(from_clause.tbls) == 1 and isinstance(from_clause.tbls[0], catalog.TableVersionPath)
+            else None
+        )
+        # Component views with unstored iterator columns need their (stored, live-versioned) iterator args retargeted
+        # to the instances this query uses. Resolve each view against the from-clause path it is reached through, so
+        # a base table appearing at different versions in different join branches binds correctly per branch.
+        iter_args: dict[UUID, exprs.Expr] = {}
+        for p in from_clause.tvps:
+            for h in p.get_tbl_versions():
+                args = h.get().iterator_args_expr()
+                if args is not None:
+                    iter_args[h.id] = args.retarget_path(p)
+        row_builder = exprs.RowBuilder(analyzer.all_exprs, [], [], context_tbl, iter_args=iter_args)
+
+        analyzer.finalize(row_builder)
+        # select_list: we need to materialize everything that's been collected
+        # with_pk: for now, we always retrieve the PK, because we need it for the file cache
+        eval_ctx = row_builder.create_eval_ctx(analyzer.select_list)
+        plan = cls._create_query_plan(
+            row_builder=row_builder,
+            analyzer=analyzer,
+            eval_ctx=eval_ctx,
+            columns=columns,
+            limit=limit,
+            offset=offset,
+            with_pk=True,
+            created_at_current_version=created_at_current_version,
+            deleted_at_current_version=deleted_at_current_version,
+        )
+        plan.ctx.ignore_errors = ignore_errors
+        select_list.clear()
+        select_list.extend(analyzer.select_list)
+        return plan
+
+    @classmethod
+    def _create_query_plan(
+        cls,
+        row_builder: exprs.RowBuilder,
+        analyzer: Analyzer,
+        eval_ctx: exprs.RowBuilder.EvalCtx,
+        columns: list[catalog.Column] | None = None,
+        limit: exprs.Expr | None = None,
+        offset: exprs.Expr | None = None,
+        with_pk: bool = False,
+        created_at_current_version: list[catalog.TableVersionHandle] | None = None,
+        deleted_at_current_version: list[catalog.TableVersionHandle] | None = None,
+        exclude_deleted_at_current_version: catalog.TableVersionHandle | None = None,
+    ) -> exec.ExecNode:
+        """
+        Create plan to materialize eval_ctx.
+
+        Args:
+            plan_target: if not None, generate a plan that materializes only expression that can be evaluted
+                in the context of that table version (eg, if 'tbl' is a view, 'plan_target' might be the base)
+        TODO: make created_at_current_version a flag and use the versions from tbl
+        """
+        if columns is None:
+            columns = []
+        if created_at_current_version is None:
+            created_at_current_version = []
+        if deleted_at_current_version is None:
+            deleted_at_current_version = []
+        sql_elements = analyzer.sql_elements
+        is_python_agg = not sql_elements.contains_all(analyzer.agg_fn_calls) or not sql_elements.contains_all(
+            analyzer.window_fn_calls
+        )
+        ctx = exec.ExecContext(row_builder)
+
+        combined_ordering = cls._create_combined_ordering(analyzer, verify_agg=is_python_agg)
+        cls._verify_join_clauses(analyzer)
+
+        # materialized with SQL table scans (ie, single-table SELECT statements):
+        # - select list subexprs that aren't aggregates
+        # - join clause subexprs
+        # - subexprs of Where clause conjuncts that can't be run in SQL
+        # - all grouping exprs
+        # - all stratify exprs
+        candidates = list(
+            exprs.Expr.list_subexprs(
+                analyzer.select_list,
+                filter=lambda e: (
+                    sql_elements.contains(e)
+                    and not e.contains_(cls=exprs.FunctionCall, filter=lambda e: bool(e.is_agg_fn_call))
+                ),
+                traverse_matches=False,
+            )
+        )
+        if analyzer.filter is not None:
+            candidates.extend(
+                exprs.Expr.subexprs(analyzer.filter, filter=sql_elements.contains, traverse_matches=False)
+            )
+        candidates.extend(
+            exprs.Expr.list_subexprs(analyzer.grouping_exprs, filter=sql_elements.contains, traverse_matches=False)
+        )
+        candidates.extend(
+            exprs.Expr.list_subexprs(analyzer.stratify_exprs, filter=sql_elements.contains, traverse_matches=False)
+        )
+        # not isinstance(...): we don't want to materialize Literals via a Select (some types, eg arrays,
+        # don't round-trip cleanly through SQL parameter binding)
+        sql_exprs = exprs.ExprSet(e for e in candidates if not isinstance(e, exprs.Literal))
+
+        # create table scans; each scan produces subexprs of (sql_exprs + join clauses)
+        join_exprs = exprs.ExprSet(
+            join_clause.join_predicate
+            for join_clause in analyzer.from_clause.join_clauses
+            if join_clause.join_predicate is not None
+        )
+        scan_target_exprs = sql_exprs | join_exprs
+        tbl_scan_plans: list[exec.SqlScanNode] = []
+        plan: exec.ExecNode
+        for tbl in analyzer.from_clause.tvps:
+            # materialize all subexprs of scan_target_exprs that are bound by tbl
+            tbl_scan_exprs = exprs.ExprSet(
+                exprs.Expr.list_subexprs(
+                    scan_target_exprs,
+                    filter=lambda e: e.is_bound_by([tbl]) and not isinstance(e, exprs.Literal),
+                    traverse_matches=False,
+                )
+            )
+
+            plan = exec.SqlScanNode(
+                tbl,
+                row_builder,
+                select_list=tbl_scan_exprs,
+                columns=[c for c in columns if c.get_tbl().id == tbl.tbl_id],
+                set_pk=with_pk,
+                cell_md_col_refs=cls._cell_md_col_refs(tbl_scan_exprs),
+                created_at_current_version=created_at_current_version,
+                deleted_at_current_version=deleted_at_current_version,
+                exclude_deleted_at_current_version=exclude_deleted_at_current_version,
+            )
+            tbl_scan_plans.append(plan)
+
+        if len(analyzer.from_clause.join_clauses) > 0:
+            plan = exec.SqlJoinNode(
+                row_builder,
+                inputs=tbl_scan_plans,
+                join_clauses=analyzer.from_clause.join_clauses,
+                select_list=sql_exprs,
+            )
+        else:
+            plan = tbl_scan_plans[0]
+
+        if analyzer.sql_where_clause is not None:
+            plan.set_where(analyzer.sql_where_clause)
+        if len(analyzer.window_fn_calls) > 0:
+            # we need to order the input for window functions
+            plan.set_order_by(analyzer.get_window_fn_ob_clause())
+
+        if analyzer.sample_clause is not None:
+            plan = exec.SqlSampleNode(
+                row_builder,
+                input=plan,
+                select_list=tbl_scan_exprs,
+                sample_clause=analyzer.sample_clause,
+                stratify_exprs=analyzer.stratify_exprs,
+            )
+
+        plan = cls._add_prefetch_node(tbl.tbl_version.id, row_builder.unique_exprs, plan)
+        plan = cls._add_cell_reconstruction_node(analyzer.all_exprs, plan)
+
+        if analyzer.filter is not None:
+            plan = exec.ExprEvalNode(row_builder, [analyzer.filter], sql_exprs, input=plan)
+            plan.set_gc(False)
+            plan = exec.FilterNode(row_builder, analyzer.filter, input=plan)
+            sql_exprs = exprs.ExprSet(sql_exprs)
+            sql_exprs.add(analyzer.filter)
+
+        if analyzer.group_by_clause is not None:
+            # batch size for aggregation input: this could be the entire table, so we need to divide it into
+            # smaller batches; at the same time, we need to make the batches large enough to amortize the
+            # function call overhead
+            ctx.batch_size = 16
+
+            # do aggregation in SQL if all agg exprs can be translated
+            if (
+                sql_elements.contains_all(analyzer.select_list)
+                and sql_elements.contains_all(analyzer.grouping_exprs)
+                and isinstance(plan, exec.SqlNode)
+            ):
+                assert isinstance(plan, exec.SqlNode)
+                plan = exec.SqlAggregationNode(
+                    row_builder, input=plan, select_list=analyzer.select_list, group_by_items=analyzer.group_by_clause
+                )
+
+            else:
+                # the input of the AggregationNode are the grouping exprs plus the args of the agg fn calls.
+                agg_input = exprs.ExprSet(analyzer.grouping_exprs.copy())
+                for fn_call in analyzer.agg_fn_calls:
+                    agg_input.update(fn_call.components)
+                if not sql_exprs.issuperset(agg_input):
+                    # we need an ExprEvalNode
+                    plan = exec.ExprEvalNode(row_builder, agg_input, sql_exprs, input=plan)
+                    plan.set_gc(False)
+
+                assert combined_ordering is not None
+                input_sql_node = plan.get_node(exec.SqlNode)
+                input_sql_node.set_order_by(combined_ordering)
+                plan = exec.AggregationNode(
+                    tbl.tbl_version,
+                    row_builder,
+                    analyzer.group_by_clause,
+                    analyzer.agg_fn_calls + analyzer.window_fn_calls,
+                    agg_input,
+                    input=plan,
+                )
+                typecheck_dummy = analyzer.grouping_exprs + analyzer.agg_fn_calls + analyzer.window_fn_calls
+                agg_output = exprs.ExprSet(typecheck_dummy)
+                if not agg_output.issuperset(exprs.ExprSet(eval_ctx.target_exprs)):
+                    # we need an ExprEvalNode to evaluate the remaining output exprs
+                    plan = exec.ExprEvalNode(row_builder, eval_ctx.target_exprs, agg_output, input=plan)
+                    plan.set_gc(False)
+                plan = cls._add_save_node(plan)
+
+        else:
+            if not exprs.ExprSet(sql_exprs).issuperset(exprs.ExprSet(eval_ctx.target_exprs)):
+                # we need an ExprEvalNode to evaluate the remaining output exprs
+                plan = exec.ExprEvalNode(row_builder, eval_ctx.target_exprs, sql_exprs, input=plan)
+                plan.set_gc(False)
+            # we're returning everything to the user, so we might as well do it in a single batch
+            # TODO: return smaller batches in order to increase inter-ExecNode parallelism
+            ctx.batch_size = 0
+
+        expr_eval_node = plan.get_node(exec.ExprEvalNode)
+        if expr_eval_node is not None:
+            # we defer GC of intermediate slots until the last ExprEvalNode in the plan
+            expr_eval_node.set_gc(True)
+
+        sql_node = plan.get_node(exec.SqlNode)
+        if len(analyzer.order_by_clause) > 0:
+            # we have the last SqlNode we created produce the ordering
+            assert sql_node is not None
+            sql_node.set_order_by(analyzer.order_by_clause)
+
+        # if we don't need an ordered result, tell the ExprEvalNode not to maintain input order (which allows us to
+        # return batches earlier)
+        if sql_node is not None and len(sql_node.order_by_clause) == 0:
+            expr_eval_node = plan.get_node(exec.ExprEvalNode)
+            if expr_eval_node is not None:
+                expr_eval_node.set_input_order(False)
+
+        if limit is not None:
+            plan.set_limit(limit)
+
+        if offset is not None:
+            plan.set_offset(offset)
+
+        plan.set_ctx(ctx)
+        return plan
+
+    @classmethod
+    def analyze(cls, tbl: catalog.TableVersionPath, where_clause: exprs.Expr) -> Analyzer:
+        return Analyzer(FromClause(tbls=[tbl]), [], where_clause=where_clause)
+
+    @classmethod
+    def create_add_column_plan(cls, tbl: catalog.TableVersionPath, col: catalog.Column) -> exec.ExecNode:
+        """Creates a plan for InsertableTable.add_column()
+        Returns:
+            plan: the plan to execute
+        """
+        assert isinstance(tbl, catalog.TableVersionPath)
+        row_builder = exprs.RowBuilder(output_exprs=[], columns=[col], input_exprs=[], tbl=tbl.tbl_version.get())
+        analyzer = Analyzer(FromClause(tbls=[tbl]), row_builder.default_eval_ctx.target_exprs)
+        analyzer.finalize(row_builder)
+        plan = cls._create_query_plan(
+            row_builder=row_builder, analyzer=analyzer, eval_ctx=row_builder.default_eval_ctx, with_pk=True
+        )
+
+        plan.ctx.batch_size = 16
+        plan.ctx.ignore_errors = True
+        plan = cls._add_cell_materialization_node(plan)
+        plan = cls._add_save_node(plan)
+
+        return plan

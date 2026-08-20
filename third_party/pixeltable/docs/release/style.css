@@ -1,0 +1,81 @@
+/* Pixeltable Documentation - Minimal overrides */
+
+/* Sidebar icon ordering (keeps notebook icons in correct position) */
+/* Target the icon wrapper div, which is a direct flex child of the <a> */
+#sidebar a > div:has(> svg.size-4) {
+  order: 1;
+}
+
+/* Widen main content area */
+article,
+[data-selector="content"],
+main > div > div {
+  max-width: 1050px !important;
+}
+
+/* Remove default sidebar active background tint */
+#sidebar [data-active="true"],
+aside [data-active="true"] {
+  background: transparent !important;
+}
+
+/* Callouts: neutral grey instead of green */
+.callout[class*="border-green"],
+.callout[class*="bg-green"],
+[class*="bg-emerald"],
+[class*="border-emerald"] {
+  background: #f5f5f5 !important;
+  border-color: #d4d4d4 !important;
+}
+
+.callout [class*="text-green"],
+.callout svg[class*="text-green"],
+[class*="bg-emerald"] svg,
+svg[class*="text-emerald"] {
+  color: #525252 !important;
+}
+
+.dark .callout[class*="border-green"],
+.dark .callout[class*="bg-green"],
+.dark [class*="bg-emerald"],
+.dark [class*="border-emerald"] {
+  background: #262626 !important;
+  border-color: #404040 !important;
+}
+
+.dark .callout [class*="text-green"],
+.dark .callout svg[class*="text-green"],
+.dark [class*="bg-emerald"] svg,
+.dark svg[class*="text-emerald"] {
+  color: #a3a3a3 !important;
+}
+
+/* Hide "Powered by Mintlify" footer badge */
+a[href*="poweredBy"] {
+  display: none !important;
+}
+
+/* ============================================
+   NOTEBOOK OUTPUTS - Fix dark mode visibility
+   Only target pre tags with inline color:black
+   from notebook output cells. Do NOT touch
+   syntax-highlighted code blocks.
+   ============================================ */
+
+.dark pre[style*="color: black"],
+.dark pre[style*="color:black"] {
+  color: #e5e5e5 !important;
+}
+
+.dark pre[style*="color: black"] *,
+.dark pre[style*="color:black"] *,
+.dark pre span[style*="color: black"],
+.dark pre span[style*="color:black"] {
+  color: #e5e5e5 !important;
+}
+
+/* Make bold text more prominent */
+strong,
+b {
+  font-weight: 700;
+}

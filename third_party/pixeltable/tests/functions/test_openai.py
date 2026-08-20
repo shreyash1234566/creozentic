@@ -1,0 +1,959 @@
+import logging
+import os
+import random
+import time
+
+import PIL.Image
+import pytest
+
+import pixeltable as pxt
+import pixeltable.functions as pxtf
+import pixeltable.type_system as ts
+from pixeltable.config import Config
+
+from ..utils import (
+    SAMPLE_IMAGE_URL,
+    pxt_raises,
+    rerun,
+    rerun_on_network_error,
+    skip_test_if_no_client,
+    skip_test_if_not_installed,
+    validate_update_status,
+)
+from .tool_utils import run_tool_invocations_test, server_state, stock_price, weather
+
+pytestmark = pytest.mark.local('UDF/integration test')
+
+_logger = logging.getLogger('pixeltable_test')
+
+
+@pytest.mark.remote_api
+@rerun_on_network_error()
+class TestOpenai:
+    @pytest.mark.expensive
+    def test_audio(self, uses_db: None) -> None:
+        skip_test_if_not_installed('openai')
+        skip_test_if_no_client('openai')
+        from pixeltable.functions.openai import speech, transcriptions, translations
+
+        t = pxt.create_table('test_tbl', {'input': pxt.String | None})
+        t.add_computed_column(speech=speech(t.input, model='tts-1', voice='onyx'))
+        t.add_computed_column(
+            speech_2=speech(
+                t.input, model='tts-1', voice='onyx', model_kwargs={'response_format': 'flac', 'speed': 1.05}
+            )
+        )
+        t.add_computed_column(transcription=transcriptions(t.speech, model='whisper-1'))
+        t.add_computed_column(
+            transcription_2=transcriptions(
+                t.speech,
+                model='whisper-1',
+                model_kwargs={'language': 'en', 'prompt': 'Transcribe the contents of this recording.'},
+            )
+        )
+        t.add_computed_column(translation=translations(t.speech, model='whisper-1'))
+        t.add_computed_column(
+            translation_2=translations(
+                t.speech,
+                model='whisper-1',
+                model_kwargs={'prompt': 'Translate the recording from Spanish into English.', 'temperature': 0.05},
+            )
+        )
+
+        # Response schema: transcription.text / .srt / .vtt are typed as String (non-null when present)
+        # and all fields are marked path-dependent via optional_keys. segments is a typed list.
+        tr_type = t.get_metadata()['columns']['transcription']['type_']
+        assert "'text': String" in tr_type
+        assert "'srt': String" in tr_type
+        assert "'vtt': String" in tr_type
+        assert "'segments':" in tr_type
+        assert (
+            "optional_keys=['duration', 'language', 'logprobs', 'segments', 'srt', 'text', 'usage', 'vtt', 'words']"
+        ) in tr_type
+        tl_type = t.get_metadata()['columns']['translation']['type_']
+        assert "'text': String" in tl_type
+        assert "'srt': String" in tl_type
+        assert "optional_keys=['duration', 'language', 'segments', 'srt', 'text', 'vtt']" in tl_type
+
+        validate_update_status(
+            t.insert([{'input': 'I am a banana.'}, {'input': 'Es fácil traducir del español al inglés.'}]),
+            expected_rows=2,
+        )
+        # The audio generation -> transcription loop on these examples should be simple and clear enough
+        # that the unit test can reliably expect the output closely enough to pass these checks.
+        results = t.order_by(t.input).collect()
+        assert len(results[0]['translation']['text']) > 0
+        assert len(results[0]['translation_2']['text']) > 0
+        assert results[1]['transcription']['text'] in ['I am a banana.', "I'm a banana."]
+        assert results[1]['transcription_2']['text'] in ['I am a banana.', "I'm a banana."]
+
+        # Schema-driven projection: text is typed String, so extracting it yields a first-class String column.
+        t.add_computed_column(transcribed=t.transcription.text)
+        assert t.get_metadata()['columns']['transcribed']['type_'] == 'String | None'
+
+        # Raw-format responses populate only the matching top-level field; other keys are absent.
+        # Exercised on a one-row mini-table to bound the number of additional remote calls.
+        t2 = pxt.create_table('test_tbl_raw_formats', {'input': pxt.String | None})
+        t2.add_computed_column(speech=speech(t2.input, model='tts-1', voice='onyx'))
+        t2.add_computed_column(
+            transcription_srt=transcriptions(t2.speech, model='whisper-1', model_kwargs={'response_format': 'srt'})
+        )
+        t2.add_computed_column(
+            translation_vtt=translations(t2.speech, model='whisper-1', model_kwargs={'response_format': 'vtt'})
+        )
+        validate_update_status(t2.insert(input='I am a banana.'), expected_rows=1)
+        row = t2.collect()[0]
+        srt = row['transcription_srt']
+        vtt = row['translation_vtt']
+        assert srt.keys() == {'srt'}
+        assert len(srt['srt']) > 0
+        assert vtt.keys() == {'vtt'}
+        assert vtt['vtt'].startswith('WEBVTT')
+
+    def test_chat_completions(self, uses_db: None) -> None:
+        skip_test_if_not_installed('openai')
+        skip_test_if_no_client('openai')
+        from pixeltable.functions.openai import chat_completions
+
+        t = pxt.create_table('test_tbl', {'input': pxt.String | None})
+        msgs = [{'role': 'system', 'content': 'You are a helpful assistant.'}, {'role': 'user', 'content': t.input}]
+        t.add_computed_column(input_msgs=msgs)
+        t.add_computed_column(chat_output=chat_completions(model='gpt-4o-mini', messages=t.input_msgs))
+        # with inlined messages
+        t.add_computed_column(chat_output_2=chat_completions(model='gpt-4o-mini', messages=msgs))
+        # test a bunch of the parameters
+        t.add_computed_column(
+            chat_output_3=chat_completions(
+                model='gpt-4o-mini',
+                messages=msgs,
+                model_kwargs={
+                    'frequency_penalty': 0.1,
+                    'logprobs': True,
+                    'top_logprobs': 3,
+                    'max_tokens': 500,
+                    'n': 3,
+                    'presence_penalty': 0.1,
+                    'seed': 4171780,
+                    'stop': ['\n'],
+                    'temperature': 0.7,
+                    'top_p': 0.8,
+                    'user': 'pixeltable',
+                },
+            )
+        )
+        # test with JSON output enforced
+        t.add_computed_column(
+            chat_output_4=chat_completions(
+                model='gpt-4o-mini', messages=msgs, model_kwargs={'response_format': {'type': 'json_object'}}
+            )
+        )
+        validate_update_status(t.insert(input='Give me an example of a typical JSON structure.'), 1)
+        result = t.collect()
+        assert len(result['chat_output'][0]['choices'][0]['message']['content']) > 0
+        assert len(result['chat_output_2'][0]['choices'][0]['message']['content']) > 0
+        assert len(result['chat_output_3'][0]['choices'][0]['message']['content']) > 0
+        assert len(result['chat_output_4'][0]['choices'][0]['message']['content']) > 0
+
+        # When OpenAI gets a request with `response_format` equal to `json_object`, but the prompt does not
+        # contain the string "json", it refuses the request.
+        # TODO This should probably not be throwing an exception, but rather logging the error in
+        # `t.chat_output_4.errormsg` etc.
+        with pxt_raises(pxt.ErrorCode.UNSUPPORTED_OPERATION, match="'messages' must contain the word 'json'"):
+            t.insert(input='Say something interesting.')
+
+    def test_responses(self, uses_db: None) -> None:
+        skip_test_if_not_installed('openai')
+        skip_test_if_no_client('openai')
+        from pixeltable.functions.openai import responses
+
+        t = pxt.create_table('test_tbl', {'input': pxt.String | None})
+        msgs = [{'role': 'user', 'content': t.input}]
+        # Basic responses call with instructions
+        t.add_computed_column(resp_output=responses(msgs, model='gpt-4o-mini'))
+        # test model_kwargs (temperature, max_output_tokens)
+        t.add_computed_column(
+            resp_output_2=responses(
+                msgs,
+                model='gpt-4o-mini',
+                model_kwargs={
+                    'instructions': (
+                        'You are an elementary school teacher explaining the answers to a group of students.'
+                    ),
+                    'temperature': 0.7,
+                    'max_output_tokens': 300,
+                    'store': False,
+                },
+            )
+        )
+        validate_update_status(t.insert(input='What are atoms made of?'), 1)
+        result = t.collect()
+        assert 'proton' in result['resp_output'][0]['output'][0]['content'][0]['text'].lower()
+        assert 'proton' in result['resp_output_2'][0]['output'][0]['content'][0]['text'].lower()
+
+    @rerun(reruns=6, reruns_delay=8)
+    def test_responses_tool_invocations(self, uses_db: None) -> None:
+        skip_test_if_not_installed('openai')
+        skip_test_if_no_client('openai')
+        from pixeltable.functions import openai
+
+        def make_table(tools: pxt.Tools, tool_choice: pxt.ToolChoice) -> pxt.Table:
+            t = pxt.create_table('test_tbl', {'prompt': pxt.String | None}, if_exists='replace')
+            messages = [{'role': 'user', 'content': t.prompt}]
+            t.add_computed_column(
+                response=openai.responses(model='gpt-4o-mini', input=messages, tools=tools, tool_choice=tool_choice)
+            )
+            t.add_computed_column(tool_calls=openai.invoke_tools(tools, t.response))
+            return t
+
+        run_tool_invocations_test(make_table, test_tool_choice=True, test_individual_tool_choice=True)
+
+    def test_responses_custom_tool_invocations(self, uses_db: None) -> None:
+        skip_test_if_not_installed('openai')
+        skip_test_if_no_client('openai')
+        from pixeltable.functions.openai import invoke_tools, responses
+
+        t = pxt.create_table('test_tbl', {'prompt': pxt.String | None})
+        messages = [{'role': 'user', 'content': t.prompt}]
+        tools = pxt.tools(
+            pxt.tool(
+                stock_price, name='banana_quantity', description='Use this to compute the banana quantity of a symbol.'
+            )
+        )
+        t.add_computed_column(response=responses(model='gpt-4o-mini', input=messages, tools=tools))
+        t.add_computed_column(output=t.response.output_text)
+        t.add_computed_column(tool_calls=invoke_tools(tools, t.response))
+        t.insert(prompt='What is the banana quantity of the symbol NVDA?')
+        res = t.select(t.output, t.tool_calls).head()
+
+        assert res[0]['output'] is None or res[0]['output'] == ''
+        assert res[0]['tool_calls'] == {'banana_quantity': [131.17]}
+
+    @pytest.mark.expensive
+    def test_reasoning_models(self, uses_db: None) -> None:
+        skip_test_if_not_installed('openai')
+        skip_test_if_no_client('openai')
+        from pixeltable.functions.openai import chat_completions
+
+        t = pxt.create_table('test_tbl', {'input': pxt.String | None})
+        msgs = [{'role': 'user', 'content': t.input}]
+        t.add_computed_column(input_msgs=msgs)
+        t.add_computed_column(
+            chat_output=chat_completions(
+                model='o3-mini', messages=t.input_msgs, model_kwargs={'reasoning_effort': 'low'}
+            )
+        )
+        validate_update_status(
+            t.insert(
+                input='Write a bash script that takes a matrix represented as a string with'
+                "format '[1,2],[3,4],[5,6]' and prints the transpose in the same format."
+            ),
+            1,
+        )
+        result = t.collect()
+        assert '#!/bin/bash' in result['chat_output'][0]['choices'][0]['message']['content']
+
+    def test_reuse_client(self, uses_db: None) -> None:
+        skip_test_if_not_installed('openai')
+        skip_test_if_no_client('openai')
+        from pixeltable.functions import openai
+
+        t = pxt.create_table('test_openai', {'input': pxt.String | None})
+        messages = [{'role': 'system', 'content': 'You are a helpful assistant.'}, {'role': 'user', 'content': t.input}]
+        t.add_computed_column(output1=openai.chat_completions(model='gpt-4o-mini', messages=messages))
+        t.insert(
+            {'input': s}
+            for s in [
+                'What is the capital of France?',
+                'What is the capital of Germany?',
+                'What is the capital of Italy?',
+                'What is the capital of Spain?',
+                'What is the capital of Portugal?',
+                'What is the capital of the United Kingdom?',
+            ]
+        )
+        # adding a second column re-uses the existing client, with an existing connection pool
+        t.add_computed_column(output2=openai.chat_completions(model='gpt-4o-mini', messages=messages))
+
+    @rerun(reruns=6, reruns_delay=8)
+    def test_tool_invocations(self, uses_db: None) -> None:
+        skip_test_if_not_installed('openai')
+        skip_test_if_no_client('openai')
+        from pixeltable.functions import openai
+
+        def make_table(tools: pxt.Tools, tool_choice: pxt.ToolChoice) -> pxt.Table:
+            t = pxt.create_table('test_tbl', {'prompt': pxt.String | None}, if_exists='replace')
+            messages = [{'role': 'user', 'content': t.prompt}]
+            t.add_computed_column(
+                response=openai.chat_completions(
+                    model='gpt-4o-mini', messages=messages, tools=tools, tool_choice=tool_choice
+                )
+            )
+            t.add_computed_column(tool_calls=openai.invoke_tools(tools, t.response))
+            return t
+
+        run_tool_invocations_test(make_table, test_tool_choice=True, test_individual_tool_choice=True)
+
+    def test_custom_tool_invocations(self, uses_db: None) -> None:
+        skip_test_if_not_installed('openai')
+        skip_test_if_no_client('openai')
+        from pixeltable.functions.openai import chat_completions, invoke_tools
+
+        t = pxt.create_table('test_tbl', {'prompt': pxt.String | None})
+        messages = [{'role': 'user', 'content': t.prompt}]
+        tools = pxt.tools(
+            pxt.tool(
+                stock_price, name='banana_quantity', description='Use this to compute the banana quantity of a symbol.'
+            )
+        )
+        t.add_computed_column(response=chat_completions(model='gpt-4o-mini', messages=messages, tools=tools))
+        t.add_computed_column(output=t.response.choices[0].message.content)
+        t.add_computed_column(tool_calls=invoke_tools(tools, t.response))
+        t.insert(prompt='What is the banana quantity of the symbol NVDA?')
+        res = t.select(t.output, t.tool_calls).head()
+
+        assert res[0]['output'] is None
+        assert res[0]['tool_calls'] == {'banana_quantity': [131.17]}
+
+    def test_nullary_tool_invocations(self, uses_db: None) -> None:
+        skip_test_if_not_installed('openai')
+        skip_test_if_no_client('openai')
+        from pixeltable.functions.openai import chat_completions, invoke_tools
+
+        t = pxt.create_table('test_tbl', {'prompt': pxt.String | None})
+        messages = [{'role': 'user', 'content': t.prompt}]
+        tools = pxt.tools(server_state)
+
+        t.add_computed_column(response=chat_completions(model='gpt-4o-mini', messages=messages, tools=tools))
+        t.add_computed_column(output=t.response.choices[0].message.content)
+        t.add_computed_column(tool_calls=invoke_tools(tools, t.response))
+        t.insert(prompt='What is the current server state?')
+        res = t.select(t.output, t.tool_calls).head()
+
+        assert res[0]['output'] is None
+        assert res[0]['tool_calls'] == {'server_state': ['Running (0x4171780)']}
+
+    @pytest.mark.parametrize('as_retrieval_udf', [False, True])
+    def test_query_as_tool(self, as_retrieval_udf: bool, uses_db: None) -> None:
+        skip_test_if_not_installed('openai')
+        skip_test_if_no_client('openai')
+        from pixeltable.functions.openai import chat_completions, invoke_tools
+
+        t = pxt.create_table('customer_tbl', {'customer_id': pxt.String | None, 'name': pxt.String | None})
+        t.insert(
+            [{'customer_id': 'Q371A', 'name': 'Aaron Siegel'}, {'customer_id': 'B117F', 'name': 'Marcel Kornacker'}]
+        )
+
+        tools: pxt.Tools
+        if as_retrieval_udf:
+            tools = pxt.tools(pxt.retrieval_udf(t, name='get_customer_info', parameters=['customer_id']))
+        else:
+
+            @pxt.query
+            def get_customer_info(customer_id: str) -> pxt.Query:
+                """
+                Get customer information for a given customer ID.
+
+                Args:
+                    customer_id - The ID of the customer to look up.
+                """
+                return t.where(t.customer_id == customer_id).select()
+
+            tools = pxt.tools(get_customer_info)
+
+        u = pxt.create_table('test_tbl', {'prompt': pxt.String | None})
+
+        messages = [{'role': 'user', 'content': u.prompt}]
+        u.add_computed_column(response=chat_completions(model='gpt-4o-mini', messages=messages, tools=tools))
+        u.add_computed_column(output=u.response.choices[0].message.content)
+        u.add_computed_column(tool_calls=invoke_tools(tools, u.response))
+        u.insert(prompt='What is the name of the customer with customer ID Q371A?')
+        u.insert(prompt='What is the name of the customer with customer ID B117F?')
+        res = u.select(u.output, u.tool_calls).head()
+
+        assert res[0]['output'] is None
+        assert res[0]['tool_calls'] == {'get_customer_info': [[{'customer_id': 'Q371A', 'name': 'Aaron Siegel'}]]}
+
+    @pytest.mark.expensive
+    def test_gpt_vision(self, uses_db: None) -> None:
+        skip_test_if_not_installed('openai')
+        skip_test_if_no_client('openai')
+        from pixeltable.functions.openai import chat_completions, vision
+
+        t = pxt.create_table('test_tbl', {'prompt': pxt.String | None, 'img': pxt.Image | None})
+        t.add_computed_column(response=vision(prompt="What's in this image?", image=t.img, model='gpt-4o-mini'))
+        # Also get the response via chat_completions
+        msgs = [
+            {'role': 'user', 'content': [{'type': 'text', 'text': t.prompt}, {'type': 'image_url', 'image_url': t.img}]}
+        ]
+        t.add_computed_column(response_2=chat_completions(msgs, model='gpt-4o-mini', model_kwargs={'max_tokens': 300}))
+        with pytest.warns(
+            pxt.exceptions.PixeltableDeprecationWarning,
+            match=r'vision\(\) is deprecated as a separate API; use chat_completions\(\) or responses\(\) instead',
+        ):
+            validate_update_status(t.insert(prompt="What's in this image?", img=SAMPLE_IMAGE_URL), 1)
+        result = t.collect()
+        assert 'broccoli' in result['response'][0].lower()
+        assert 'broccoli' in result['response_2'][0]['choices'][0]['message']['content'].lower()
+
+    def test_embeddings(self, uses_db: None) -> None:
+        skip_test_if_not_installed('openai')
+        skip_test_if_no_client('openai')
+        from pixeltable.functions.openai import embeddings
+
+        t = pxt.create_table('test_tbl', {'input': pxt.String | None})
+
+        # Embeddings as computed columns
+        t.add_computed_column(embed1=embeddings(model='text-embedding-3-large', input=t.input))
+        t.add_computed_column(
+            embed2=embeddings(
+                model='text-embedding-3-small', input=t.input, model_kwargs={'dimensions': 1024, 'user': 'pixeltable'}
+            )
+        )
+        type_info = t._get_schema()
+        assert isinstance(type_info['embed1'], ts.ArrayType)
+        assert type_info['embed1'].shape == (3072,)
+        assert isinstance(type_info['embed2'], ts.ArrayType)
+        assert type_info['embed2'].shape == (1024,)
+        validate_update_status(t.insert(input='Say something interesting.'), 1)
+
+        # Via add_embedding_index()
+        t.add_embedding_index(t.input, embedding=embeddings.using(model='text-embedding-3-small'))
+        validate_update_status(t.insert(input='Another sentence for you to index.'), 1)
+        _ = t.head()
+
+        sim = t.input.similarity(string='Indexing sentences is fun.')
+        res = t.select(t.input, sim=sim).order_by(sim, asc=False).collect()
+
+        # The exact values are probabilistic, but we should reliably get similarity > 0.5 for the sentence about
+        # indexing and < 0.5 for the unrelated one.
+        assert res[0]['input'] == 'Another sentence for you to index.'
+        assert res[0]['sim'] > 0.5
+        assert res[1]['input'] == 'Say something interesting.'
+        assert res[1]['sim'] < 0.5
+
+    def test_moderations(self, uses_db: None) -> None:
+        skip_test_if_not_installed('openai')
+        skip_test_if_no_client('openai')
+        from pixeltable.functions.openai import moderations
+
+        t = pxt.create_table('test_tbl', {'input': pxt.String | None})
+        t.add_computed_column(moderation=moderations(input=t.input))
+        t.add_computed_column(moderation_2=moderations(input=t.input, model='omni-moderation-latest'))
+
+        # Response schema: results is a typed list, each Moderation has a typed flagged Bool and nested categories.
+        mod_type = t.get_metadata()['columns']['moderation']['type_']
+        assert "'results':" in mod_type
+        assert "'flagged': Bool" in mod_type
+        assert "'categories':" in mod_type
+
+        validate_update_status(t.insert(input='Say something interesting.'), 1)
+        _ = t.head()
+
+        # Schema-driven projection: results[0].flagged is typed Bool.
+        t.add_computed_column(flagged=t.moderation.results[0].flagged)
+        assert t.get_metadata()['columns']['flagged']['type_'] == 'Bool | None'
+
+    @pytest.mark.expensive
+    def test_image_generations_gpt_image(self, uses_db: None) -> None:
+        skip_test_if_not_installed('openai')
+        skip_test_if_no_client('openai')
+        from pixeltable.functions.openai import image_generations
+
+        t = pxt.create_table('test_tbl', {'input': pxt.String | None})
+        t.add_computed_column(img=image_generations(t.input, model='gpt-image-2'))
+        t.add_computed_column(
+            img_2=image_generations(t.input, model='gpt-image-2', model_kwargs={'quality': 'low', 'size': '1024x1024'})
+        )
+
+        img_type = t.get_metadata()['columns']['img']['type_']
+        assert "'data': Json[(Image, ...)]" in img_type
+        assert "'usage':" in img_type
+
+        validate_update_status(t.insert(input='A friendly dinosaur playing tennis in a cornfield'), 1)
+        result = t.collect()
+        assert isinstance(result['img'][0]['data'][0], PIL.Image.Image)
+        assert isinstance(result['img_2'][0]['data'][0], PIL.Image.Image)
+
+        t.add_computed_column(first=t.img.data[0])
+        assert t.get_metadata()['columns']['first']['type_'] == 'Image | None'
+
+    @pytest.mark.expensive
+    def test_image_edits_gpt_image(self, uses_db: None) -> None:
+        skip_test_if_not_installed('openai')
+        skip_test_if_no_client('openai')
+        from pixeltable.functions.openai import image_edits
+
+        t = pxt.create_table('test_tbl', {'img': pxt.Image | None})
+        t.add_computed_column(
+            edited=image_edits(
+                t.img,
+                prompt='Add a party hat on top',
+                model='gpt-image-2',
+                model_kwargs={'quality': 'low', 'size': '1024x1024'},
+            )
+        )
+
+        edited_type = t.get_metadata()['columns']['edited']['type_']
+        assert "'data': Json[(Image, ...)]" in edited_type
+        assert "'usage':" in edited_type
+
+        validate_update_status(t.insert(img=SAMPLE_IMAGE_URL), 1)
+        result = t.collect()
+        assert isinstance(result['edited'][0]['data'][0], PIL.Image.Image)
+
+        t.add_computed_column(first=t.edited.data[0])
+        assert t.get_metadata()['columns']['first']['type_'] == 'Image | None'
+
+    @pytest.mark.expensive
+    def test_image_edits_with_mask(self, uses_db: None) -> None:
+        """Test image_edits with a mask image specifying the edit region.
+
+        The mask must have the same dimensions as the input image. Both are created
+        programmatically at 1024x1024 (a valid gpt-image-2 input size) to guarantee this.
+        """
+        skip_test_if_not_installed('openai')
+        skip_test_if_no_client('openai')
+        import numpy as np
+
+        from pixeltable.functions.openai import image_edits
+
+        # Source image: 1024x1024 solid color (valid gpt-image-2 input size)
+        src_arr = np.full((1024, 1024, 3), fill_value=[70, 130, 180], dtype=np.uint8)  # steel blue
+        src_img = PIL.Image.fromarray(src_arr, mode='RGB')
+
+        # Mask: same 1024x1024 dimensions — mask must match input image size exactly.
+        # Transparent pixels (alpha=0) mark the region to be edited.
+        mask_arr = np.zeros((1024, 1024, 4), dtype=np.uint8)
+        mask_arr[:, :, 3] = 255  # fully opaque everywhere (keep)
+        mask_arr[:512, :512, 3] = 0  # transparent in top-left quadrant (edit here)
+        mask_img = PIL.Image.fromarray(mask_arr, mode='RGBA')
+
+        t = pxt.create_table('test_tbl', {'img': pxt.Image | None, 'mask': pxt.Image | None})
+        t.add_computed_column(
+            edited=image_edits(
+                t.img,
+                mask=t.mask,
+                prompt='Fill the top-left corner with a bright red apple',
+                model='gpt-image-2',
+                model_kwargs={'quality': 'low', 'size': '1024x1024'},
+            )
+        )
+
+        edited_type = t.get_metadata()['columns']['edited']['type_']
+        assert "'data': Json[(Image, ...)]" in edited_type
+        assert "'usage':" in edited_type
+
+        validate_update_status(t.insert(img=src_img, mask=mask_img), 1)
+        result = t.collect()
+        assert isinstance(result['edited'][0]['data'][0], PIL.Image.Image)
+
+        t.add_computed_column(first=t.edited.data[0])
+        assert t.get_metadata()['columns']['first']['type_'] == 'Image | None'
+
+    @pytest.mark.skip(
+        reason='[PXT-1115] Image variation endpoint is restricted until Pixeltable org is verified by OpenAI.'
+    )
+    @pytest.mark.expensive
+    def test_image_variations(self, uses_db: None) -> None:
+        skip_test_if_not_installed('openai')
+        skip_test_if_no_client('openai')
+        import numpy as np
+
+        from pixeltable.functions.openai import image_variations
+
+        # dall-e-2 requires a square PNG; create one programmatically
+        arr = np.full((512, 512, 3), fill_value=[100, 149, 237], dtype=np.uint8)
+        src_img = PIL.Image.fromarray(arr, mode='RGB')
+
+        t = pxt.create_table('test_tbl', {'img': pxt.Image | None})
+        t.add_computed_column(variation=image_variations(t.img, model='dall-e-2', model_kwargs={'size': '512x512'}))
+
+        variation_type = t.get_metadata()['columns']['variation']['type_']
+        assert "'data': Json[(Image, ...)]" in variation_type
+        assert "'usage':" in variation_type
+
+        validate_update_status(t.insert(img=src_img), 1)
+        result = t.collect()
+        assert isinstance(result['variation'][0]['data'][0], PIL.Image.Image)
+        assert result['variation'][0]['data'][0].size == (512, 512)
+
+        t.add_computed_column(first=t.variation.data[0])
+        assert t.get_metadata()['columns']['first']['type_'] == 'Image | None'
+
+    @pytest.mark.expensive
+    def test_table_udf_tools(self, uses_db: None) -> None:
+        skip_test_if_not_installed('openai')
+        skip_test_if_no_client('openai')
+        from pixeltable.functions.openai import chat_completions, invoke_tools
+
+        # Register tools
+        finance_tools = pxt.tools(stock_price)
+        weather_tools = pxt.tools(weather)
+
+        # Finance agent
+        finance_agent = pxt.create_table('finance_agent', {'prompt': pxt.String | None})
+        finance_agent.add_computed_column(
+            initial_response=chat_completions(
+                model='gpt-4o-mini',
+                messages=[{'role': 'user', 'content': finance_agent.prompt}],
+                tools=finance_tools,
+                tool_choice=finance_tools.choice(required=True),
+            )
+        )
+        finance_agent.add_computed_column(tool_output=invoke_tools(finance_tools, finance_agent.initial_response))
+        finance_agent.add_computed_column(
+            tool_response_prompt=pxtf.string.format(
+                'Orginal Prompt\n{0}: Tool Output\n{1}', finance_agent.prompt, finance_agent.tool_output
+            )
+        )
+        finance_agent.add_computed_column(
+            final_response=chat_completions(
+                model='gpt-4o-mini',
+                messages=[
+                    {
+                        'role': 'system',
+                        'content': (
+                            'You are a helpful AI assistant that can use various tools. '
+                            'Analyze the tool results and provide a clear, concise response.'
+                        ),
+                    },
+                    {'role': 'user', 'content': finance_agent.tool_response_prompt},
+                ],
+            )
+        )
+        finance_agent.add_computed_column(answer=finance_agent.final_response.choices[0].message.content)
+        finance_agent_udf = pxt.udf(finance_agent, return_value=finance_agent.answer)
+
+        # Weather agent
+        weather_agent = pxt.create_table('weather_agent', {'prompt': pxt.String | None})
+        weather_agent.add_computed_column(
+            initial_response=chat_completions(
+                model='gpt-4o-mini',
+                messages=[{'role': 'user', 'content': weather_agent.prompt}],
+                tools=weather_tools,
+                tool_choice=weather_tools.choice(required=True),
+            )
+        )
+        weather_agent.add_computed_column(tool_output=invoke_tools(weather_tools, weather_agent.initial_response))
+        weather_agent.add_computed_column(
+            tool_response_prompt=pxtf.string.format(
+                'Orginal Prompt\n{0}: Tool Output\n{1}', weather_agent.prompt, weather_agent.tool_output
+            )
+        )
+        weather_agent.add_computed_column(
+            final_response=chat_completions(
+                model='gpt-4o-mini',
+                messages=[
+                    {
+                        'role': 'system',
+                        'content': (
+                            'You are a helpful AI assistant that can use various tools. '
+                            'Analyze the tool results and provide a clear, concise response.'
+                        ),
+                    },
+                    {'role': 'user', 'content': weather_agent.tool_response_prompt},
+                ],
+            )
+        )
+        weather_agent.add_computed_column(answer=weather_agent.final_response.choices[0].message.content)
+        weather_agent_udf = pxt.udf(weather_agent, return_value=weather_agent.answer)
+
+        # Team tools
+        team_tools = pxt.tools(finance_agent_udf, weather_agent_udf)
+
+        # Manager Agent
+        manager = pxt.create_table('manager', {'prompt': pxt.String | None})
+        manager.add_computed_column(
+            initial_response=chat_completions(
+                model='gpt-4o-mini',
+                messages=[{'role': 'user', 'content': manager.prompt}],
+                tools=team_tools,
+                tool_choice=team_tools.choice(required=True),
+            )
+        )
+        manager.add_computed_column(tool_output=invoke_tools(team_tools, manager.initial_response))
+        manager.add_computed_column(
+            tool_response_prompt=pxtf.string.format(
+                'Orginal Prompt\n{0}: Tool Output\n{1}', manager.prompt, manager.tool_output
+            )
+        )
+        manager.add_computed_column(
+            final_response=chat_completions(
+                model='gpt-4o-mini',
+                messages=[
+                    {
+                        'role': 'system',
+                        'content': (
+                            'You are a helpful AI assistant that can use various tools. '
+                            'Analyze the tool results and provide a clear, concise response.'
+                        ),
+                    },
+                    {'role': 'user', 'content': manager.tool_response_prompt},
+                ],
+            )
+        )
+        manager.add_computed_column(answer=manager.final_response.choices[0].message.content)
+
+        manager.insert([{'prompt': "what's the weather in sf"}])
+        r1 = manager.select(manager.answer).collect()
+        assert len(r1) == 1
+        assert 'weather' in r1[0, 'answer'] and 'San Francisco' in r1[0, 'answer']
+        manager.insert([{'prompt': 'stock price of apple'}])
+        r2 = manager.select(manager.answer).collect()
+        assert len(r2) == 2
+        assert any('Apple' in answer for answer in r2['answer'])
+
+    @rerun(reruns=3, reruns_delay=8)
+    def test_azure_openai(self, uses_db: None) -> None:
+        skip_test_if_not_installed('openai')
+        if not os.environ.get('AZURE_OPENAI_API_KEY'):
+            pytest.skip('`AZURE_OPENAI_API_KEY` is not set.')
+        Config.init(
+            {
+                'openai.api_key': os.environ['AZURE_OPENAI_API_KEY'],
+                'openai.base_url': 'https://pixeltable1.openai.azure.com/openai/v1/',
+                'openai.api_version': 'preview',
+            },
+            reinit=True,
+        )
+        from pixeltable.functions.openai import chat_completions
+
+        t = pxt.create_table('test_tbl', {'input': pxt.String | None})
+        msgs = [{'role': 'system', 'content': 'You are a helpful assistant.'}, {'role': 'user', 'content': t.input}]
+        t.add_computed_column(chat_output=chat_completions(model='gpt-4.1-nano-pxt', messages=msgs))
+        validate_update_status(t.insert(input='Where did the game of Backgammon originate?'), 1)
+        result = t.collect()
+        assert 'Mesopotamia' in result['chat_output'][0]['choices'][0]['message']['content']
+
+    @pytest.mark.expensive
+    def test_chat_completions_scheduler(self, uses_db: None) -> None:
+        """
+        Scheduler throughput test: 20 rows through gpt-4o-mini to verify the rate-limit
+        scheduler dispatches and completes requests without errors.
+
+        Meant to be used in conjunction with a rate limit enabled openai api key, to manually verify that
+        the retry logic in RateLimitsScheduler is working properly. If the test fails with a non-zero
+        number of exceptions, check the logs to see if they were 429 errors and if retries were attempted.
+        """
+        skip_test_if_not_installed('openai')
+        skip_test_if_no_client('openai')
+        from pixeltable.functions.openai import chat_completions
+
+        with open('tests/data/random_words', encoding='utf-8') as f:
+            wordlist = [w.strip() for w in f if w.strip() and not w.startswith('#')]
+
+        num_rows = 20
+        model = 'gpt-4o-mini'
+
+        t = pxt.create_table('scheduler_tbl', {'word1': pxt.String | None, 'word2': pxt.String | None})
+        t.add_computed_column(
+            prompt=[
+                {'role': 'system', 'content': 'You are a helpful assistant. Be concise.'},
+                {'role': 'user', 'content': 'Use ' + t.word1 + ' and ' + t.word2 + ' in one short sentence.'},
+            ]
+        )
+        t.add_computed_column(response=chat_completions(t.prompt, model=model))
+
+        rows = [{'word1': w1, 'word2': w2} for w1, w2 in (random.sample(wordlist, k=2) for _ in range(num_rows))]
+
+        t0 = time.monotonic()
+        status = t.insert(rows, on_error='ignore')
+        elapsed = time.monotonic() - t0
+
+        succeeded = num_rows - status.num_excs
+        _logger.debug(
+            f'model={model}, rows={num_rows}, '
+            f'succeeded={succeeded}, errors={status.num_excs}, '
+            f'elapsed={elapsed:.2f}s  ({succeeded / max(elapsed, 0.001):.2f} req/s)'
+        )
+
+        assert status.num_excs == 0, f'{status.num_excs} rows failed permanently'
+
+    def test_shared_rate_limits_pool_different_signatures(self, uses_db: None) -> None:
+        """Verify that functions sharing a rate-limits pool with different resource estimators work correctly.
+
+        chat_completions and vision share a pool but each has its own resource_estimator with different
+        parameters. Inserting 2+ rows ensures the second call hits the rate-limited path.
+        """
+        skip_test_if_not_installed('openai')
+        skip_test_if_no_client('openai')
+        from pixeltable.functions.openai import vision
+
+        t = pxt.create_table('test_tbl', {'img': pxt.Image | None})
+        t.add_computed_column(response=vision(prompt="What's in this image?", image=t.img, model='gpt-4o-mini'))
+        # Insert 2 rows: first initializes the pool synchronously, second goes through _get_request_resources
+        with pytest.warns(
+            pxt.exceptions.PixeltableDeprecationWarning,
+            match=r'vision\(\) is deprecated as a separate API; use chat_completions\(\) or responses\(\) instead',
+        ):
+            validate_update_status(t.insert([{'img': SAMPLE_IMAGE_URL}, {'img': SAMPLE_IMAGE_URL}]), expected_rows=2)
+        result = t.collect()
+        assert len(result) == 2
+        for row in result:
+            assert len(row['response']) > 0
+
+
+class TestOpenaiTypedDictAdherence:
+    """Detect drift between our TypedDict mirrors and the SDK Pydantic models. Doesn't need credentials."""
+
+    def _strip_required(self, s: object) -> object:
+        """Recursively drop 'required' keys from a JSON-schema-like structure. SDK Pydantic models and our
+        TypedDicts use different conventions for optional fields (Pydantic: has a default; TypedDict: may
+        be absent), so equality at this level isn't meaningful for adherence."""
+        if isinstance(s, dict):
+            return {k: self._strip_required(v) for k, v in s.items() if k != 'required'}
+        if isinstance(s, list):
+            return [self._strip_required(item) for item in s]
+        return s
+
+    def _normalize(self, ct: ts.ColumnType) -> object:
+        """JSON-schema view of ct with optional/required info stripped at every nested level."""
+        return self._strip_required(ct.to_json_schema())
+
+    def _td_fields(self, t: type) -> tuple[dict[str, ts.ColumnType], frozenset[str]]:
+        """Resolve a TypedDict to (field_types, optional_keys). Optional keys are meaningful at the top level."""
+        jt = ts.JsonType.from_python_type(t)
+        assert isinstance(jt, ts.JsonType), t
+        assert jt.type_schema is not None and isinstance(jt.type_schema.type_spec, dict), t
+        return jt.type_schema.type_spec, jt.type_schema.optional_keys
+
+    def _pydantic_fields(self, model: type) -> dict[str, ts.ColumnType]:
+        """Per-field JsonType conversion of a Pydantic model. Fields whose annotation can't be converted to
+        a Pixeltable type are omitted (callers must declare them in overrides)."""
+        import pydantic
+
+        assert issubclass(model, pydantic.BaseModel)
+        out: dict[str, ts.ColumnType] = {}
+        for name, info in model.model_fields.items():
+            try:
+                ct = ts.ColumnType.normalize_type(info.annotation)
+            except Exception:
+                continue
+            out[name] = ct
+        return out
+
+    def test_exact_mirror_types(self) -> None:
+        """JsonType equality for TypedDicts that are exact mirrors of an SDK Pydantic model."""
+        skip_test_if_not_installed('openai')
+        from openai.types import (
+            images_response as sdk_images,
+            moderation as sdk_moderation,
+            moderation_create_response as sdk_moderation_create_response,
+        )
+        from openai.types.audio import (
+            transcription as sdk_transcription,
+            transcription_verbose as sdk_transcription_verbose,
+        )
+
+        from pixeltable.functions import openai as pxt_openai
+
+        pairs = [
+            (pxt_openai.TranscriptionWord, sdk_transcription_verbose.TranscriptionWord),
+            (pxt_openai.TranscriptionSegment, sdk_transcription_verbose.TranscriptionSegment),
+            (pxt_openai.Logprob, sdk_transcription.Logprob),
+            (pxt_openai.UsageInputTokensDetails, sdk_images.UsageInputTokensDetails),
+            (pxt_openai.UsageOutputTokensDetails, sdk_images.UsageOutputTokensDetails),
+            (pxt_openai.Usage, sdk_images.Usage),
+            (pxt_openai.Categories, sdk_moderation.Categories),
+            (pxt_openai.CategoryScores, sdk_moderation.CategoryScores),
+            (pxt_openai.CategoryAppliedInputTypes, sdk_moderation.CategoryAppliedInputTypes),
+            (pxt_openai.Moderation, sdk_moderation.Moderation),
+            (pxt_openai.ModerationCreateResponse, sdk_moderation_create_response.ModerationCreateResponse),
+        ]
+        for ours, sdk in pairs:
+            ours_jt = ts.JsonType.from_python_type(ours)
+            sdk_jt = ts.JsonType.from_python_type(sdk)
+            assert isinstance(ours_jt, ts.JsonType) and isinstance(sdk_jt, ts.JsonType)
+            # Ignore optional_keys at every nested level: Pydantic and TypedDict mean different things
+            # by "optional", but model_dump() always emits all fields, so the dict shape matches.
+            assert self._normalize(ours_jt) == self._normalize(sdk_jt), (
+                f'{ours.__name__} drifted from {sdk.__module__}.{sdk.__name__}:\n  ours: {ours_jt}\n  sdk:  {sdk_jt}'
+            )
+
+    def test_transcription_response(self) -> None:
+        """TranscriptionResponse unions Transcription + TranscriptionVerbose; we add synth srt/vtt and
+        re-type usage as plain dict to avoid committing to one variant of the SDK Usage union."""
+        skip_test_if_not_installed('openai')
+        from openai.types.audio.transcription import Transcription
+        from openai.types.audio.transcription_verbose import TranscriptionVerbose
+
+        from pixeltable.functions.openai import TranscriptionResponse
+
+        ours_fields, ours_optional = self._td_fields(TranscriptionResponse)
+        sdk_fields: dict[str, ts.ColumnType] = {}
+        for model in (Transcription, TranscriptionVerbose):
+            sdk_fields.update(self._pydantic_fields(model))
+
+        synth = {'srt', 'vtt'}  # fields we add that the SDK does not have
+        overrides = {'usage'}  # fields we deliberately re-type (kept as dict); not convertible anyway
+
+        for name, sdk_type in sdk_fields.items():
+            if name in overrides:
+                continue
+            assert name in ours_fields, f'TranscriptionResponse missing SDK field {name!r}'
+            assert self._normalize(ours_fields[name]) == self._normalize(sdk_type), (
+                f'TranscriptionResponse field {name!r} drifted: ours={ours_fields[name]} sdk={sdk_type}'
+            )
+
+        # SDK fields we couldn't convert must be in overrides
+        sdk_unconverted = set(Transcription.model_fields) | set(TranscriptionVerbose.model_fields)
+        sdk_unconverted -= set(sdk_fields)
+        assert sdk_unconverted <= overrides, (
+            f'Unhandled SDK fields (not convertible and not in overrides): {sdk_unconverted - overrides}'
+        )
+
+        extra = set(ours_fields) - set(sdk_fields) - synth - overrides
+        assert not extra, f'TranscriptionResponse has unexpected fields not in SDK or synth: {extra}'
+
+        # every field is path-dependent
+        assert ours_optional == frozenset(ours_fields.keys())
+
+    def test_translation_response(self) -> None:
+        """TranslationResponse unions Translation + TranslationVerbose; we add synth srt/vtt."""
+        skip_test_if_not_installed('openai')
+        from openai.types.audio.translation import Translation
+        from openai.types.audio.translation_verbose import TranslationVerbose
+
+        from pixeltable.functions.openai import TranslationResponse
+
+        ours_fields, ours_optional = self._td_fields(TranslationResponse)
+        sdk_fields: dict[str, ts.ColumnType] = {}
+        for model in (Translation, TranslationVerbose):
+            sdk_fields.update(self._pydantic_fields(model))
+
+        synth = {'srt', 'vtt'}
+
+        for name, sdk_type in sdk_fields.items():
+            assert name in ours_fields, f'TranslationResponse missing SDK field {name!r}'
+            assert self._normalize(ours_fields[name]) == self._normalize(sdk_type), (
+                f'TranslationResponse field {name!r} drifted: ours={ours_fields[name]} sdk={sdk_type}'
+            )
+
+        extra = set(ours_fields) - set(sdk_fields) - synth
+        assert not extra, f'TranslationResponse has unexpected fields not in SDK or synth: {extra}'
+
+        assert ours_optional == frozenset(ours_fields.keys())
+
+    def test_images_response(self) -> None:
+        """ImagesResponse mirrors SDK ImagesResponse field-for-field, except data is non-null
+        (we guarantee a populated list in _decode_image_response)."""
+        skip_test_if_not_installed('openai')
+        from openai.types.images_response import ImagesResponse as SdkImagesResponse
+
+        from pixeltable.functions.openai import ImagesResponse
+
+        ours_fields, ours_optional = self._td_fields(ImagesResponse)
+        sdk_fields = self._pydantic_fields(SdkImagesResponse)
+
+        overrides = {'data'}  # we re-type and guarantee non-null
+        assert set(ours_fields) == set(sdk_fields), (
+            f'ImagesResponse field set drifted: ours={set(ours_fields)} sdk={set(sdk_fields)}'
+        )
+        for name, sdk_type in sdk_fields.items():
+            if name in overrides:
+                continue
+            assert self._normalize(ours_fields[name]) == self._normalize(sdk_type), (
+                f'ImagesResponse field {name!r} drifted: ours={ours_fields[name]} sdk={sdk_type}'
+            )
+        # all fields always present
+        assert ours_optional == frozenset()

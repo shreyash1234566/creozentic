@@ -1,0 +1,32 @@
+{
+  "internal/lite_server.go": {
+    "mtime": 1787136925.467344,
+    "seen": 1787212611.0078108,
+    "ast_hash": "d9af6ae30109b3ae565a7cc0c8a0c7e5",
+    "semantic_hash": "d9af6ae30109b3ae565a7cc0c8a0c7e5"
+  },
+  "logger.go": {
+    "mtime": 1787136925.467344,
+    "seen": 1787212611.007814,
+    "ast_hash": "1bf975582c952436b0b0468c56315b53",
+    "semantic_hash": "1bf975582c952436b0b0468c56315b53"
+  },
+  "options.go": {
+    "mtime": 1787136925.467344,
+    "seen": 1787212611.0078156,
+    "ast_hash": "9ba845d225a1a50cb1d266d8ab514ac8",
+    "semantic_hash": "9ba845d225a1a50cb1d266d8ab514ac8"
+  },
+  "server.go": {
+    "mtime": 1787136925.467344,
+    "seen": 1787212611.0078168,
+    "ast_hash": "b9e2ea29bdfd465f919c39b8ea54d16d",
+    "semantic_hash": "b9e2ea29bdfd465f919c39b8ea54d16d"
+  },
+  "server_test.go": {
+    "mtime": 1787136925.467344,
+    "seen": 1787212611.0078173,
+    "ast_hash": "570dcb44afadcddcfd2b70a8a9c1b0da",
+    "semantic_hash": "570dcb44afadcddcfd2b70a8a9c1b0da"
+  }
+}

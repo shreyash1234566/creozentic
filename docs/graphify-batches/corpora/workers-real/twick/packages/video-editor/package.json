@@ -1,0 +1,62 @@
+{
+  "name": "@twick/video-editor",
+  "version": "0.15.0",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./dist/video-editor.css": "./dist/video-editor.css"
+  },
+  "sideEffects": [
+    "**/*.css"
+  ],
+  "license": "https://github.com/ncounterspecialist/twick/blob/main/LICENSE.md",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc --noEmit && vite build",
+    "dev": "vite build --watch",
+    "lint": "eslint src/",
+    "clean": "rimraf .turbo node_modules dist",
+    "docs": "typedoc",
+    "test": "echo \"No tests for @twick/video-editor\" && exit 0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@emotion/is-prop-valid": "^1.2.2",
+    "@twick/canvas": "workspace:*",
+    "@twick/live-player": "workspace:*",
+    "@twick/timeline": "workspace:*",
+    "@react-spring/web": "^10.0.1",
+    "@use-gesture/react": "^10.3.0",
+    "@twick/media-utils": "workspace:*",
+    "framer-motion": "^11.0.3",
+    "lucide-react": "^0.511.0"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0 || ^19.0.0",
+    "react-dom": "^18.0.0 || ^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.24",
+    "@types/react": "^18.0.0 || ^19.0.0",
+    "@types/react-dom": "^18.0.0 || ^19.0.0",
+    "rimraf": "^5.0.5",
+    "typedoc": "^0.25.8",
+    "typedoc-plugin-markdown": "^3.17.1",
+    "typescript": "^5.4.2",
+    "vite": "^5.4.21",
+    "vite-plugin-dts": "^3.7.3"
+  }
+}

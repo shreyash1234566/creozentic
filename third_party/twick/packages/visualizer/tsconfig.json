@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "sourceMap": true,
+    "noImplicitAny": true,
+    "module": "CommonJS",
+    "target": "ES2020",
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "allowJs": true,
+    "noEmit": false,
+    "outDir": "dist",
+    "moduleResolution": "node",
+    "resolveJsonModule": true,
+    "allowSyntheticDefaultImports": true,
+    "experimentalDecorators": true,
+    "skipLibCheck": true,
+    "jsx": "react-jsx",
+    "jsxImportSource": "@twick/2d",
+    "downlevelIteration": true,
+    "baseUrl": ".",
+    "paths": {
+      "@twick/2d/jsx-runtime": ["./src/jsx-dev-runtime-shim.ts"],
+      "@twick/2d/jsx-dev-runtime": ["./src/jsx-dev-runtime-shim.ts"]
+    }
+  },
+  "include": ["src"]
+}

@@ -1,0 +1,41 @@
+{
+  "name": "@twick/examples",
+  "version": "0.15.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "docs": "echo 'Examples package - no API docs to generate'",
+    "lint": "eslint .",
+    "preview": "vite preview",
+    "clean": "rimraf .turbo node_modules dist",
+    "test": "echo \"No tests for @twick/examples\" && exit 0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@twick/studio": "workspace:*",
+    "@twick/browser-render": "workspace:*",
+    "@twick/visualizer": "workspace:*",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
+    "react-router-dom": "^7.6.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.25.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.4.1",
+    "eslint": "^9.25.0",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "eslint-plugin-react-refresh": "^0.4.19",
+    "globals": "^16.0.0",
+    "typescript": "~5.8.3",
+    "typescript-eslint": "^8.30.1",
+    "vite": "^6.3.5"
+  }
+}

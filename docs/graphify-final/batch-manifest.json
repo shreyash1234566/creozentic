@@ -1,0 +1,359 @@
+{
+  "project": "creozentic",
+  "graphifyVersion": "0.9.47",
+  "globalGraph": "/home/ubuntu/.graphify/global-graph.json",
+  "finalArtifacts": {
+    "graph": "docs/graphify-final/graph.json",
+    "html": "docs/graphify-final/graph.html",
+    "report": "docs/graphify-final/GRAPH_REPORT.md"
+  },
+  "repositoryCoverage": [
+    {
+      "repository": "openshorts",
+      "coveredByBatch": true,
+      "note": ""
+    },
+    {
+      "repository": "cutscript",
+      "coveredByBatch": true,
+      "note": ""
+    },
+    {
+      "repository": "videoclipper",
+      "coveredByBatch": true,
+      "note": ""
+    },
+    {
+      "repository": "ai-broll",
+      "coveredByBatch": true,
+      "note": ""
+    },
+    {
+      "repository": "funclip",
+      "coveredByBatch": true,
+      "note": ""
+    },
+    {
+      "repository": "ave",
+      "coveredByBatch": true,
+      "note": ""
+    },
+    {
+      "repository": "pixeltable",
+      "coveredByBatch": true,
+      "note": ""
+    },
+    {
+      "repository": "vimax",
+      "coveredByBatch": true,
+      "note": ""
+    },
+    {
+      "repository": "videoagent",
+      "coveredByBatch": true,
+      "note": ""
+    },
+    {
+      "repository": "videodb-director",
+      "coveredByBatch": true,
+      "note": ""
+    },
+    {
+      "repository": "comfyui",
+      "coveredByBatch": true,
+      "note": ""
+    },
+    {
+      "repository": "temporal",
+      "coveredByBatch": true,
+      "note": ""
+    },
+    {
+      "repository": "openchatcut",
+      "coveredByBatch": true,
+      "note": ""
+    },
+    {
+      "repository": "openmontage",
+      "coveredByBatch": true,
+      "note": ""
+    },
+    {
+      "repository": "twick",
+      "coveredByBatch": true,
+      "note": ""
+    },
+    {
+      "repository": "ffmpeg",
+      "coveredByBatch": true,
+      "note": "FFmpeg is a system binary and is represented by application/configuration references, not a cloned source repository."
+    }
+  ],
+  "batches": [
+    {
+      "batch": "application",
+      "status": "completed",
+      "graphPath": "docs/graphify-batches/outputs/application/graphify-out/graph.json",
+      "nodes": 2050,
+      "edges": 0,
+      "warnings": []
+    },
+    {
+      "batch": "documentation",
+      "status": "completed",
+      "graphPath": "docs/graphify-batches/outputs/documentation/graphify-out/graph.json",
+      "nodes": 140,
+      "edges": 0,
+      "warnings": []
+    },
+    {
+      "batch": "temporal-modules/api",
+      "status": "completed",
+      "graphPath": "docs/graphify-batches/outputs/temporal-modules/api/graphify-out/graph.json",
+      "nodes": 12648,
+      "edges": 0,
+      "warnings": []
+    },
+    {
+      "batch": "temporal-modules/chasm",
+      "status": "completed",
+      "graphPath": "docs/graphify-batches/outputs/temporal-modules/chasm/graphify-out/graph.json",
+      "nodes": 5043,
+      "edges": 0,
+      "warnings": []
+    },
+    {
+      "batch": "temporal-modules/client",
+      "status": "completed",
+      "graphPath": "docs/graphify-batches/outputs/temporal-modules/client/graphify-out/graph.json",
+      "nodes": 3193,
+      "edges": 0,
+      "warnings": []
+    },
+    {
+      "batch": "temporal-modules/cmd",
+      "status": "completed",
+      "graphPath": "docs/graphify-batches/outputs/temporal-modules/cmd/graphify-out/graph.json",
+      "nodes": 179,
+      "edges": 0,
+      "warnings": []
+    },
+    {
+      "batch": "temporal-modules/common",
+      "status": "completed",
+      "graphPath": "docs/graphify-batches/outputs/temporal-modules/common/graphify-out/graph.json",
+      "nodes": 17135,
+      "edges": 0,
+      "warnings": []
+    },
+    {
+      "batch": "temporal-modules/components",
+      "status": "completed",
+      "graphPath": "docs/graphify-batches/outputs/temporal-modules/components/graphify-out/graph.json",
+      "nodes": 546,
+      "edges": 0,
+      "warnings": []
+    },
+    {
+      "batch": "temporal-modules/config",
+      "status": "completed",
+      "graphPath": "docs/graphify-batches/outputs/temporal-modules/config/graphify-out/graph.json",
+      "nodes": 5,
+      "edges": 0,
+      "warnings": []
+    },
+    {
+      "batch": "temporal-modules/docker",
+      "status": "completed",
+      "graphPath": "docs/graphify-batches/outputs/temporal-modules/docker/graphify-out/graph.json",
+      "nodes": 13,
+      "edges": 0,
+      "warnings": []
+    },
+    {
+      "batch": "temporal-modules/proto",
+      "status": "completed",
+      "graphPath": "docs/graphify-batches/outputs/temporal-modules/proto/graphify-out/graph.json",
+      "nodes": 0,
+      "edges": 0,
+      "warnings": []
+    },
+    {
+      "batch": "temporal-modules/schema",
+      "status": "completed",
+      "graphPath": "docs/graphify-batches/outputs/temporal-modules/schema/graphify-out/graph.json",
+      "nodes": 1050,
+      "edges": 0,
+      "warnings": []
+    },
+    {
+      "batch": "temporal-modules/service",
+      "status": "completed",
+      "graphPath": "docs/graphify-batches/outputs/temporal-modules/service/graphify-out/graph.json",
+      "nodes": 16971,
+      "edges": 0,
+      "warnings": []
+    },
+    {
+      "batch": "temporal-modules/temporal",
+      "status": "completed",
+      "graphPath": "docs/graphify-batches/outputs/temporal-modules/temporal/graphify-out/graph.json",
+      "nodes": 197,
+      "edges": 0,
+      "warnings": []
+    },
+    {
+      "batch": "temporal-modules/temporaltest",
+      "status": "completed",
+      "graphPath": "docs/graphify-batches/outputs/temporal-modules/temporaltest/graphify-out/graph.json",
+      "nodes": 88,
+      "edges": 0,
+      "warnings": []
+    },
+    {
+      "batch": "temporal-modules/tests",
+      "status": "completed",
+      "graphPath": "docs/graphify-batches/outputs/temporal-modules/tests/graphify-out/graph.json",
+      "nodes": 3435,
+      "edges": 0,
+      "warnings": []
+    },
+    {
+      "batch": "temporal-modules/tools",
+      "status": "completed",
+      "graphPath": "docs/graphify-batches/outputs/temporal-modules/tools/graphify-out/graph.json",
+      "nodes": 1217,
+      "edges": 0,
+      "warnings": []
+    },
+    {
+      "batch": "workers/ai-broll",
+      "status": "completed",
+      "graphPath": "docs/graphify-batches/outputs/workers/ai-broll/graphify-out/graph.json",
+      "nodes": 5,
+      "edges": 0,
+      "warnings": []
+    },
+    {
+      "batch": "workers/ave",
+      "status": "completed",
+      "graphPath": "docs/graphify-batches/outputs/workers/ave/graphify-out/graph.json",
+      "nodes": 983,
+      "edges": 0,
+      "warnings": []
+    },
+    {
+      "batch": "workers/comfyui",
+      "status": "completed",
+      "graphPath": "docs/graphify-batches/outputs/workers/comfyui/graphify-out/graph.json",
+      "nodes": 20202,
+      "edges": 0,
+      "warnings": []
+    },
+    {
+      "batch": "workers/cutscript",
+      "status": "completed",
+      "graphPath": "docs/graphify-batches/outputs/workers/cutscript/graphify-out/graph.json",
+      "nodes": 407,
+      "edges": 0,
+      "warnings": []
+    },
+    {
+      "batch": "workers/funclip",
+      "status": "completed",
+      "graphPath": "docs/graphify-batches/outputs/workers/funclip/graphify-out/graph.json",
+      "nodes": 213,
+      "edges": 0,
+      "warnings": []
+    },
+    {
+      "batch": "workers/openchatcut",
+      "status": "completed",
+      "graphPath": "docs/graphify-batches/outputs/workers/openchatcut/graphify-out/graph.json",
+      "nodes": 16314,
+      "edges": 0,
+      "warnings": []
+    },
+    {
+      "batch": "workers/openmontage",
+      "status": "completed",
+      "graphPath": "docs/graphify-batches/outputs/workers/openmontage/graphify-out/graph.json",
+      "nodes": 12835,
+      "edges": 0,
+      "warnings": []
+    },
+    {
+      "batch": "workers/openshorts",
+      "status": "completed",
+      "graphPath": "docs/graphify-batches/outputs/workers/openshorts/graphify-out/graph.json",
+      "nodes": 2311,
+      "edges": 0,
+      "warnings": []
+    },
+    {
+      "batch": "workers/pixeltable",
+      "status": "completed",
+      "graphPath": "docs/graphify-batches/outputs/workers/pixeltable/graphify-out/graph.json",
+      "nodes": 11347,
+      "edges": 0,
+      "warnings": []
+    },
+    {
+      "batch": "workers/temporal",
+      "status": "completed",
+      "graphPath": "docs/graphify-batches/outputs/workers/temporal/graphify-out/graph.json",
+      "nodes": 58907,
+      "edges": 0,
+      "warnings": [
+        "warning: 23 source file(s) produced zero nodes and are absent from the graph: actionlint-matcher.json, cluster_settings_v7.json, index_template_v7.json, index_template_v7.json, index_template_v7.json (+18 more). A re-run will retry them (empties are no longer cached); if it persists, please report the file(s) (#1666)."
+      ]
+    },
+    {
+      "batch": "workers/twick",
+      "status": "completed",
+      "graphPath": "docs/graphify-batches/outputs/workers/twick/graphify-out/graph.json",
+      "nodes": 4322,
+      "edges": 0,
+      "warnings": []
+    },
+    {
+      "batch": "workers/videoagent",
+      "status": "completed",
+      "graphPath": "docs/graphify-batches/outputs/workers/videoagent/graphify-out/graph.json",
+      "nodes": 4956,
+      "edges": 0,
+      "warnings": []
+    },
+    {
+      "batch": "workers/videoclipper",
+      "status": "completed",
+      "graphPath": "docs/graphify-batches/outputs/workers/videoclipper/graphify-out/graph.json",
+      "nodes": 445,
+      "edges": 0,
+      "warnings": []
+    },
+    {
+      "batch": "workers/videodb-director",
+      "status": "completed",
+      "graphPath": "docs/graphify-batches/outputs/workers/videodb-director/graphify-out/graph.json",
+      "nodes": 836,
+      "edges": 0,
+      "warnings": []
+    },
+    {
+      "batch": "workers/vimax",
+      "status": "completed",
+      "graphPath": "docs/graphify-batches/outputs/workers/vimax/graphify-out/graph.json",
+      "nodes": 1406,
+      "edges": 0,
+      "warnings": []
+    }
+  ],
+  "knownUnparsedData": [
+    "Graphify code-only mode does not parse every binary/media/model artifact.",
+    "Some JSON/configuration files returned zero AST nodes and are listed in batch logs.",
+    "Proto files in Temporal were preserved in the source corpus but Graphify reported them as unsupported in this installation.",
+    "src/views/Connectors.tsx was partially parsed because Graphify reported a syntax error at line 388.",
+    "Documentation semantic extraction used the configured OpenAI backend; six documentation/config files returned no semantic nodes and are listed in the documentation batch warning output."
+  ]
+}

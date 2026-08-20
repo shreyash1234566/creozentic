@@ -1,0 +1,1 @@
+{"nodes": [{"id": "$graphify-root$_api_adminservicemock_v1_service_pb_mock_go", "label": "service.pb.mock.go", "file_type": "code", "source_file": "api/adminservicemock/v1/service.pb.mock.go", "source_location": "L1"}], "edges": [], "raw_calls": [], "go_imports": {}}

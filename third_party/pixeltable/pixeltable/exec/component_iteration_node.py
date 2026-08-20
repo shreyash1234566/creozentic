@@ -1,0 +1,118 @@
+from typing import AsyncIterator
+
+from pixeltable import catalog, exceptions as excs, exprs
+from pixeltable.func.iterator import GeneratingFunctionCall
+
+from .data_row_batch import DataRowBatch
+from .exec_node import ExecNode
+
+
+class ComponentIterationNode(ExecNode):
+    """Expands each row from a base table into one row per component returned by an iterator
+
+    Returns row batches of OUTPUT_BATCH_SIZE size.
+    """
+
+    view: catalog.TableVersionHandle
+    iterator_call: GeneratingFunctionCall
+    iterator_args_expr: exprs.InlineDict
+    iterator_args_ctx: exprs.RowBuilder.EvalCtx
+    iterator_output_cols: dict[str, catalog.Column]
+    refd_output_slot_idxs: dict[str, int]
+
+    __OUTPUT_BATCH_SIZE = 1024
+
+    def __init__(
+        self, view: catalog.TableVersionHandle, input: ExecNode, iterator_args: exprs.InlineDict | None = None
+    ):
+        assert view.get().is_component_view
+        iterator_call = view.get().iterator_call
+        # referenced iterator output fields; the view-id test excludes a base column of the same name, which an
+        # iterator output shadows and which is never a destination for an output value
+        refd_col_refs = [
+            e
+            for e in input.row_builder.unique_exprs
+            if isinstance(e, exprs.ColumnRef) and e.col.get_tbl().id == view.id and e.col.name in iterator_call.outputs
+        ]
+        super().__init__(input.row_builder, refd_col_refs, [], input)
+
+        self.view = view
+        self.iterator_call = iterator_call
+        if iterator_args is not None:
+            # a recorded form of the view's iterator args; required when it differs structurally from
+            # iterator_args_expr() (eg, references to computed columns were resolved when it was recorded),
+            # in which case set_slot_idxs() cannot match a fresh copy
+            assert iterator_args.slot_idx is not None
+            self.iterator_args_expr = iterator_args
+        else:
+            iterator_args_expr = [view.get().iterator_args_expr()]
+            self.row_builder.set_slot_idxs(iterator_args_expr)
+            self.iterator_args_expr = iterator_args_expr[0]
+        self.iterator_args_ctx = self.row_builder.create_eval_ctx([self.iterator_args_expr])
+        self.iterator_output_cols = {name: self.view.get().cols_by_name[name] for name in self.iterator_call.outputs}
+
+        self.refd_output_slot_idxs = {e.col.name: e.slot_idx for e in refd_col_refs}
+
+    async def __aiter__(self) -> AsyncIterator[DataRowBatch]:
+        output_batch = DataRowBatch(self.row_builder)
+        async for input_batch in self.input:
+            for input_row in input_batch:
+                self.row_builder.eval(input_row, self.iterator_args_ctx)
+                iterator_args = input_row[self.iterator_args_expr.slot_idx]
+                assert isinstance(iterator_args, dict)
+                # We need to ensure that all of the required (non-nullable) parameters of the iterator are
+                # specified and are not null. If any of them are null, then we skip this row (i.e., we emit 0
+                # output rows for this input row).
+                if self.__non_nullable_args_specified(iterator_args):
+                    iterator = self.view.get().iterator_call.eval(iterator_args)
+                    try:
+                        for pos, component_dict in enumerate(iterator):
+                            output_row = self.row_builder.make_row()
+                            input_row.copy(output_row)
+                            # we're expanding the input and need to add the iterator position to the pk
+                            self.__populate_output_row(output_row, pos, component_dict)
+                            output_batch.add_row(output_row)
+                            if len(output_batch) == self.__OUTPUT_BATCH_SIZE:
+                                yield output_batch
+                                output_batch = DataRowBatch(self.row_builder)
+                    finally:
+                        iterator.close()
+
+        if len(output_batch) > 0:
+            yield output_batch
+
+    def __non_nullable_args_specified(self, iterator_args: dict) -> bool:
+        """
+        Returns true if all non-nullable iterator arguments are not `None`.
+        """
+        iterator_cls = self.view.get().iterator_call.it
+        for arg_name, arg_value in iterator_args.items():
+            col_type = iterator_cls.signature.parameters[arg_name].col_type
+            if arg_value is None and not col_type.nullable:
+                return False
+        return True
+
+    def __populate_output_row(self, output_row: exprs.DataRow, pos: int, component_dict: dict) -> None:
+        pk = (*output_row.pk[:-1], pos, output_row.pk[-1])
+        output_row.set_pk(pk)
+        # validate component_dict fields and copy them to their respective slots in output_row.
+        # if the column names differ from the component_dict keys, the remapping occurs here.
+        for name, output_info in self.iterator_call.outputs.items():
+            if output_info.is_pos_column:
+                # the position is part of the pk; also materialize it if there's a slot for it
+                if name in self.refd_output_slot_idxs:
+                    output_row[self.refd_output_slot_idxs[name]] = pos
+                continue
+            if output_info.orig_name not in component_dict:
+                raise excs.RequestError(
+                    excs.ErrorCode.INVALID_CONFIGURATION,
+                    f'Invalid output from iterator `{self.iterator_call.it.fqn}`: '
+                    f'Expected to find a field {output_info.orig_name!r}. Output:\n{component_dict}',
+                )
+            if name not in self.refd_output_slot_idxs:
+                # we can ignore this
+                continue
+            val = component_dict[output_info.orig_name]
+            output_col = self.iterator_output_cols[name]
+            output_col.col_type.validate_literal(val)
+            output_row[self.refd_output_slot_idxs[name]] = val

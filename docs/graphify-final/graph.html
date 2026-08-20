@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>.graphify — Complete Call Flow &amp; Architecture Documentation</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<style>
+:root {
+  --bg: #0f172a; --surface: #1e293b; --border: #334155;
+  --text: #e2e8f0; --muted: #94a3b8; --accent: #38bdf8;
+  --warn: #fbbf24; --err: #f87171; --ok: #34d399;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); line-height: 1.7; }
+.container { max-width: 1200px; margin: 0 auto; padding: 40px 24px; }
+h1 { font-size: 2.4rem; margin-bottom: 8px; background: linear-gradient(135deg, var(--accent), #a78bfa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+h2 { font-size: 1.7rem; margin: 48px 0 16px; padding-bottom: 8px; border-bottom: 2px solid var(--accent); }
+h3 { font-size: 1.25rem; margin: 32px 0 12px; color: var(--accent); }
+h4 { font-size: 1.05rem; margin: 20px 0 8px; color: var(--warn); }
+p { margin: 8px 0; color: var(--muted); }
+.subtitle { color: var(--muted); font-size: 1.1rem; margin-bottom: 32px; }
+.mermaid { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin: 20px 0; overflow-x: auto; position: relative; }
+.mermaid.is-enhanced { padding: 0; overflow: hidden; min-height: 260px; }
+.mermaid-viewport { padding: 54px 24px 24px; overflow: hidden; cursor: grab; touch-action: none; min-height: 260px; }
+.mermaid-viewport.is-dragging { cursor: grabbing; }
+.mermaid-viewport svg { max-width: none !important; height: auto; transform-origin: 0 0; transition: transform 120ms ease; }
+.mermaid-toolbar { position: absolute; top: 10px; right: 10px; z-index: 3; display: flex; align-items: center; gap: 6px; padding: 6px; background: rgba(15,23,42,0.92); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.28); }
+.mermaid-toolbar button, .mermaid-toolbar .zoom-level { height: 28px; min-width: 32px; border: 1px solid var(--border); border-radius: 6px; background: #1e293b; color: var(--text); font: 600 0.78rem system-ui, sans-serif; display: inline-flex; align-items: center; justify-content: center; }
+.mermaid-toolbar button { cursor: pointer; }
+.mermaid-toolbar button:hover { border-color: var(--accent); color: var(--accent); }
+.mermaid-toolbar .zoom-level { min-width: 52px; color: var(--muted); background: transparent; }
+.call-table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.92rem; }
+.call-table th { background: #1a2744; color: var(--accent); text-align: left; padding: 10px 14px; border: 1px solid var(--border); }
+.call-table td { padding: 8px 14px; border: 1px solid var(--border); vertical-align: top; }
+.call-table tr:nth-child(even) { background: rgba(255,255,255,0.02); }
+.tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 600; }
+.tag-async { background: #7c3aed33; color: #a78bfa; }
+.tag-class { background: #05966933; color: var(--ok); }
+.tag-func { background: #2563eb33; color: var(--accent); }
+.tag-cmd { background: #d9770633; color: var(--warn); }
+.tag-endpoint { background: #dc262633; color: var(--err); }
+.tag-hook { background: #db277733; color: #f472b6; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin: 16px 0; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; margin: 16px 0; }
+.arrow-chain { font-family: 'Fira Code', monospace; font-size: 0.85rem; color: var(--accent); padding: 10px; background: rgba(56,189,248,0.06); border-radius: 6px; }
+code { font-family: 'Fira Code', 'Cascadia Code', monospace; background: rgba(255,255,255,0.06); padding: 1px 6px; border-radius: 3px; font-size: 0.88em; }
+ul, ol { margin: 8px 0 8px 24px; color: var(--muted); }
+li { margin: 4px 0; }
+a { color: var(--accent); }
+hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+.nav { position: sticky; top: 0; background: var(--bg); z-index: 10; padding: 12px 0; border-bottom: 1px solid var(--border); display: flex; gap: 20px; flex-wrap: wrap; font-size: 0.9rem; }
+.nav a { text-decoration: none; }
+.nav a:hover { text-decoration: underline; }
+@media (max-width: 768px) { .container { padding: 16px; } h1 { font-size: 1.8rem; } }
+
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>.graphify — Complete Call Flow &amp; Architecture Documentation</h1>
+<p class="subtitle">Generated from graphify knowledge graph: 139909 nodes, 352997 edges, 1 communities. Commit: unknown</p>
+
+<div class="nav">
+    <a href="#overview">Architecture Overview</a>
+    <a href="#serve-api">Serving API</a>
+</div>
+
+<!-- ====== Architecture Overview ====== -->
+<h2 id="overview">1. Architecture Overview</h2>
+
+<div class="mermaid">
+
+%%{init: {"theme": "dark", "themeVariables": {"fontSize": "15.0px", "fontFamily": "Segoe UI, system-ui, sans-serif", "primaryColor": "#1e293b", "primaryTextColor": "#e2e8f0", "primaryBorderColor": "#38bdf8", "secondaryColor": "#0f172a", "tertiaryColor": "#334155", "lineColor": "#64748b", "textColor": "#e2e8f0"}, "flowchart": {"htmlLabels": true, "curve": "basis", "nodeSpacing": 48, "rankSpacing": 64, "padding": 14, "diagramPadding": 10, "useMaxWidth": true}}}%%
+flowchart LR
+    SERVE_API_35EC8E86("Serving API<br/><small>139909 nodes</small>")
+    class SERVE_API_35EC8E86 module;
+    classDef entry fill:#422006,stroke:#fbbf24,color:#fde68a,stroke-width:1px;
+    classDef api fill:#450a0a,stroke:#f87171,color:#fee2e2,stroke-width:1px;
+    classDef async fill:#2e1065,stroke:#a78bfa,color:#ede9fe,stroke-width:1px;
+    classDef klass fill:#064e3b,stroke:#34d399,color:#d1fae5,stroke-width:1px;
+    classDef ui fill:#831843,stroke:#f472b6,color:#fce7f3,stroke-width:1px;
+    classDef module fill:#172554,stroke:#60a5fa,color:#dbeafe,stroke-width:1px;
+    classDef test fill:#3f3f46,stroke:#a1a1aa,color:#f4f4f5,stroke-width:1px;
+    classDef concept fill:#292524,stroke:#a8a29e,color:#fafaf9,stroke-dasharray:4 3;
+    classDef function fill:#0f172a,stroke:#38bdf8,color:#e0f2fe,stroke-width:1px;
+</div>
+
+<div class="grid">
+  <div class="card">
+    <h4>Architecture Layers</h4>
+    <table style="width:100%;font-size:0.85rem;">
+      <tr><th>Layer</th><th>Nodes</th><th>Communities</th></tr>
+      <tr><td>Serving API</td><td>139909</td><td><code>unknown</code></td></tr>
+    </table>
+  </div>
+  <div class="card">
+    <h4>Core Flow</h4>
+    <div class="arrow-chain">Serving API</div>
+  </div>
+</div>
+<hr>
+<!-- ====== 2. Serving API ====== -->
+<h2 id="serve-api">2. Serving API</h2>
+<p>Serving API groups implementation around test, comfy, testgo, history, mostly in historyservice/v1/request_response.pb.go, adminservice/v1/request_response.pb.go, matchingservice/v1/request_response.pb.go. This section covers 139909 nodes and 352997 internal edges; the diagram shows only representative relationships to stay readable.</p>
+
+<div class="mermaid">
+%%{init: {"theme": "dark", "themeVariables": {"fontSize": "15.0px", "fontFamily": "Segoe UI, system-ui, sans-serif", "primaryColor": "#1e293b", "primaryTextColor": "#e2e8f0", "primaryBorderColor": "#38bdf8", "secondaryColor": "#0f172a", "tertiaryColor": "#334155", "lineColor": "#64748b", "textColor": "#e2e8f0"}, "flowchart": {"htmlLabels": true, "curve": "basis", "nodeSpacing": 48, "rankSpacing": 64, "padding": 14, "diagramPadding": 10, "useMaxWidth": true}}}%%
+flowchart LR
+    %% Section: Serving API (139909 nodes, 352997 edges)
+    subgraph serve_api_src_server_editor_ts_c0c02768["src/server/editor.ts"]
+        application_src_server_editor_geteditorproject_326705b6("getEditorProject()<br/><small>src/server/editor.ts</small>")
+        application_src_server_editor_analyzeeditorproje_d2bbdd7f("analyzeEditorProject()<br/><small>src/server/editor.ts</small>")
+        application_src_server_editor_planeditorproject_69794f22("planEditorProject()<br/><small>src/server/editor.ts</small>")
+        application_src_server_editor_generateeditorvisu_8f22494e("generateEditorVisualInserts()<br/><small>src/server/editor.ts</small>")
+        application_src_server_editor_mutateeditorprojec_141bcbb9("mutateEditorProject()<br/><small>src/server/editor.ts</small>")
+        application_src_server_editor_createeditorprojec_60f7afba("createEditorProject()<br/><small>src/server/editor.ts</small>")
+    end
+    subgraph serve_api_External_generated_a71e9f44["External / generated"]
+        comfyui_valueerror_b4b35201("ValueError")
+        ave_tests_test_web_render_py_path_a28073be("Path")
+    end
+    subgraph serve_api_projectId_segments_route_ts_b87152b7["[projectId]/[...segments]/route.ts"]
+        application_app_api_editor_projects_projectid_se_8f53aa63("GET()<br/><small>[projectId]/[...segments]/route.ts</small>")
+        application_app_api_editor_projects_projectid_se_277fe0b8("POST()<br/><small>[projectId]/[...segments]/route.ts</small>")
+    end
+    subgraph serve_api_history_interfaces_mutable_state_mock_c8b0bf2f["history/interfaces/mutable_state_mock.go"]
+        temporal_service_interfaces_mockmutablestate_719bfe51("MockMutableState<br/><small>history/interfaces/mutable_state_mock.go</small>")
+        temporal_service_interfaces_mockmutablestatemock_22fa29d4("MockMutableStateMockRecorder<br/><small>history/interfaces/mutable_state_mock.go</small>")
+    end
+    application_app_api_v1_agency_metrics_route_get_5beef088("GET()<br/><small>agency/metrics/route.ts</small>")
+    application_app_api_editor_projects_route_post_1bd18b3d("POST()<br/><small>editor/projects/route.ts</small>")
+    temporal_service_history_workflow_mutable_state_8b17d47a("MutableStateImpl<br/><small>history/workflow/mutable_state_impl.go</small>")
+    pixeltable_packages_opentelemetry_instrumentatio_7032c119("__init__.py")
+    application_src_server_api_jsonerror_5e237092("jsonError()<br/><small>src/server/api.ts</small>")
+    application_src_server_auth_getrequestcontext_1f58a9bf("getRequestContext()<br/><small>src/server/auth.ts</small>")
+    application_app_api_editor_projects_projectid_se_8f53aa63 -->|calls| application_src_server_auth_getrequestcontext_1f58a9bf
+    application_app_api_editor_projects_projectid_se_8f53aa63 -->|calls| application_src_server_editor_geteditorproject_326705b6
+    application_app_api_editor_projects_projectid_se_8f53aa63 -->|calls| application_src_server_api_jsonerror_5e237092
+    application_app_api_editor_projects_projectid_se_277fe0b8 -->|calls| application_src_server_auth_getrequestcontext_1f58a9bf
+    application_app_api_editor_projects_projectid_se_277fe0b8 -->|calls| application_src_server_editor_analyzeeditorproje_d2bbdd7f
+    application_app_api_editor_projects_projectid_se_277fe0b8 -->|calls| application_src_server_editor_planeditorproject_69794f22
+    application_app_api_editor_projects_projectid_se_277fe0b8 -->|calls| application_src_server_editor_generateeditorvisu_8f22494e
+    application_app_api_editor_projects_projectid_se_277fe0b8 -->|calls| application_src_server_editor_mutateeditorprojec_141bcbb9
+    application_app_api_editor_projects_projectid_se_277fe0b8 -->|calls| application_src_server_api_jsonerror_5e237092
+    application_app_api_editor_projects_route_post_1bd18b3d -->|calls| application_src_server_editor_createeditorprojec_60f7afba
+    application_app_api_editor_projects_route_post_1bd18b3d -->|calls| application_src_server_auth_getrequestcontext_1f58a9bf
+    application_app_api_editor_projects_route_post_1bd18b3d -->|calls| application_src_server_api_jsonerror_5e237092
+    application_app_api_v1_agency_metrics_route_get_5beef088 -->|calls| application_src_server_auth_getrequestcontext_1f58a9bf
+    application_app_api_v1_agency_metrics_route_get_5beef088 -->|calls| application_src_server_api_jsonerror_5e237092
+    application_src_server_editor_geteditorproject_326705b6 -->|calls| application_src_server_editor_analyzeeditorproje_d2bbdd7f
+    application_src_server_editor_geteditorproject_326705b6 -->|calls| application_src_server_editor_planeditorproject_69794f22
+    application_src_server_editor_geteditorproject_326705b6 -->|calls| application_src_server_editor_generateeditorvisu_8f22494e
+    application_src_server_editor_geteditorproject_326705b6 -->|calls| application_src_server_editor_mutateeditorprojec_141bcbb9
+    %% Omitted for readability: 139891 nodes, 0 edges
+    class application_src_server_editor_geteditorproject_326705b6 function;
+    class application_src_server_editor_analyzeeditorproje_d2bbdd7f function;
+    class application_src_server_editor_planeditorproject_69794f22 function;
+    class application_src_server_editor_generateeditorvisu_8f22494e function;
+    class application_src_server_editor_mutateeditorprojec_141bcbb9 function;
+    class application_src_server_editor_createeditorprojec_60f7afba function;
+    class comfyui_valueerror_b4b35201 klass;
+    class ave_tests_test_web_render_py_path_a28073be klass;
+    class application_app_api_editor_projects_projectid_se_8f53aa63 function;
+    class application_app_api_editor_projects_projectid_se_277fe0b8 function;
+    class temporal_service_interfaces_mockmutablestate_719bfe51 klass;
+    class temporal_service_interfaces_mockmutablestatemock_22fa29d4 klass;
+    class application_app_api_v1_agency_metrics_route_get_5beef088 function;
+    class application_app_api_editor_projects_route_post_1bd18b3d function;
+    class temporal_service_history_workflow_mutable_state_8b17d47a klass;
+    class pixeltable_packages_opentelemetry_instrumentatio_7032c119 module;
+    class application_src_server_api_jsonerror_5e237092 function;
+    class application_src_server_auth_getrequestcontext_1f58a9bf function;
+    classDef entry fill:#422006,stroke:#fbbf24,color:#fde68a,stroke-width:1px;
+    classDef api fill:#450a0a,stroke:#f87171,color:#fee2e2,stroke-width:1px;
+    classDef async fill:#2e1065,stroke:#a78bfa,color:#ede9fe,stroke-width:1px;
+    classDef klass fill:#064e3b,stroke:#34d399,color:#d1fae5,stroke-width:1px;
+    classDef ui fill:#831843,stroke:#f472b6,color:#fce7f3,stroke-width:1px;
+    classDef module fill:#172554,stroke:#60a5fa,color:#dbeafe,stroke-width:1px;
+    classDef test fill:#3f3f46,stroke:#a1a1aa,color:#f4f4f5,stroke-width:1px;
+    classDef concept fill:#292524,stroke:#a8a29e,color:#fafaf9,stroke-dasharray:4 3;
+    classDef function fill:#0f172a,stroke:#38bdf8,color:#e0f2fe,stroke-width:1px;
+</div>
+
+<h3>Call Details</h3>
+<table class="call-table">
+<tr>
+  <th style="width:5%">#</th>
+  <th style="width:28%">Node</th>
+  <th style="width:10%">Type</th>
+  <th style="width:17%">Caller</th>
+  <th style="width:20%">Callees</th>
+  <th style="width:20%">Description</th>
+</tr>
+<tr>
+  <td>1</td>
+  <td><code>admin/page.tsx</code><br><small style="color:var(--muted)">app/admin/page.tsx</small></td>
+  <td><span class="tag tag-hook">UI</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Module file in app/admin/page.tsx.</td>
+</tr>
+<tr>
+  <td>2</td>
+  <td><code>AdminPage()</code><br><small style="color:var(--muted)">app/admin/page.tsx</small></td>
+  <td><span class="tag tag-hook">UI</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Organizes documentation pages, navigation, or content lookup.</td>
+</tr>
+<tr>
+  <td>3</td>
+  <td><code>[...segments]/route.ts</code><br><small style="color:var(--muted)">[projectId]/[...segments]/route.ts</small></td>
+  <td><span class="tag tag-endpoint">API</span></td>
+  <td>External entry / no inbound edge</td>
+  <td><code>analyzeEditorProject()</code><br><small style="color:var(--muted)">src/server/editor.ts</small><br><code>api.ts</code><br><small style="color:var(--muted)">src/server/api.ts</small><br><code>ApiError</code><br><small style="color:var(--muted)">src/server/api.ts</small><br>+9 more</td>
+  <td>Module file in [projectId]/[...segments]/route.ts.</td>
+</tr>
+<tr>
+  <td>4</td>
+  <td><code>GET()</code><br><small style="color:var(--muted)">[projectId]/[...segments]/route.ts</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td>External entry / no inbound edge</td>
+  <td><code>getEditorProject()</code><br><small style="color:var(--muted)">src/server/editor.ts</small><br><code>getRequestContext()</code><br><small style="color:var(--muted)">src/server/auth.ts</small><br><code>jsonError()</code><br><small style="color:var(--muted)">src/server/api.ts</small></td>
+  <td>GET() node in [projectId]/[...segments]/route.ts.</td>
+</tr>
+<tr>
+  <td>5</td>
+  <td><code>POST()</code><br><small style="color:var(--muted)">[projectId]/[...segments]/route.ts</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td>External entry / no inbound edge</td>
+  <td><code>analyzeEditorProject()</code><br><small style="color:var(--muted)">src/server/editor.ts</small><br><code>generateEditorVisualInserts()</code><br><small style="color:var(--muted)">src/server/editor.ts</small><br><code>getRequestContext()</code><br><small style="color:var(--muted)">src/server/auth.ts</small><br>+3 more</td>
+  <td>POST() node in [projectId]/[...segments]/route.ts.</td>
+</tr>
+<tr>
+  <td>6</td>
+  <td><code>editor/projects/route.ts</code><br><small style="color:var(--muted)">editor/projects/route.ts</small></td>
+  <td><span class="tag tag-endpoint">API</span></td>
+  <td>External entry / no inbound edge</td>
+  <td><code>api.ts</code><br><small style="color:var(--muted)">src/server/api.ts</small><br><code>ApiError</code><br><small style="color:var(--muted)">src/server/api.ts</small><br><code>application::ref_next_server</code><br>+7 more</td>
+  <td>Module file in editor/projects/route.ts.</td>
+</tr>
+<tr>
+  <td>7</td>
+  <td><code>POST()</code><br><small style="color:var(--muted)">editor/projects/route.ts</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td>External entry / no inbound edge</td>
+  <td><code>createEditorProject()</code><br><small style="color:var(--muted)">src/server/editor.ts</small><br><code>getRequestContext()</code><br><small style="color:var(--muted)">src/server/auth.ts</small><br><code>jsonError()</code><br><small style="color:var(--muted)">src/server/api.ts</small></td>
+  <td>POST() node in editor/projects/route.ts.</td>
+</tr>
+<tr>
+  <td>8</td>
+  <td><code>metrics/route.ts</code><br><small style="color:var(--muted)">agency/metrics/route.ts</small></td>
+  <td><span class="tag tag-endpoint">API</span></td>
+  <td>External entry / no inbound edge</td>
+  <td><code>agency-operations.ts</code><br><small style="color:var(--muted)">src/server/agency-operations.ts</small><br><code>agencyMetrics()</code><br><small style="color:var(--muted)">src/server/agency-operations.ts</small><br><code>api.ts</code><br><small style="color:var(--muted)">src/server/api.ts</small><br>+4 more</td>
+  <td>Module file in agency/metrics/route.ts.</td>
+</tr>
+<tr>
+  <td>9</td>
+  <td><code>GET()</code><br><small style="color:var(--muted)">agency/metrics/route.ts</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td>External entry / no inbound edge</td>
+  <td><code>agencyMetrics()</code><br><small style="color:var(--muted)">src/server/agency-operations.ts</small><br><code>getRequestContext()</code><br><small style="color:var(--muted)">src/server/auth.ts</small><br><code>jsonError()</code><br><small style="color:var(--muted)">src/server/api.ts</small></td>
+  <td>GET() node in agency/metrics/route.ts.</td>
+</tr>
+<tr>
+  <td>10</td>
+  <td><code>[itemId]/route.ts</code><br><small style="color:var(--muted)">queue/[itemId]/route.ts</small></td>
+  <td><span class="tag tag-endpoint">API</span></td>
+  <td>External entry / no inbound edge</td>
+  <td><code>agency-operations.ts</code><br><small style="color:var(--muted)">src/server/agency-operations.ts</small><br><code>api.ts</code><br><small style="color:var(--muted)">src/server/api.ts</small><br><code>application::ref_next_server</code><br>+4 more</td>
+  <td>Module file in queue/[itemId]/route.ts.</td>
+</tr>
+<tr>
+  <td>11</td>
+  <td><code>PATCH()</code><br><small style="color:var(--muted)">queue/[itemId]/route.ts</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td>External entry / no inbound edge</td>
+  <td><code>getRequestContext()</code><br><small style="color:var(--muted)">src/server/auth.ts</small><br><code>jsonError()</code><br><small style="color:var(--muted)">src/server/api.ts</small><br><code>updateAgencyWorkItem()</code><br><small style="color:var(--muted)">src/server/agency-operations.ts</small></td>
+  <td>PATCH() node in queue/[itemId]/route.ts.</td>
+</tr>
+<tr>
+  <td>12</td>
+  <td><code>queue/route.ts</code><br><small style="color:var(--muted)">agency/queue/route.ts</small></td>
+  <td><span class="tag tag-endpoint">API</span></td>
+  <td>External entry / no inbound edge</td>
+  <td><code>agency-operations.ts</code><br><small style="color:var(--muted)">src/server/agency-operations.ts</small><br><code>api.ts</code><br><small style="color:var(--muted)">src/server/api.ts</small><br><code>application::ref_next_server</code><br>+4 more</td>
+  <td>Module file in agency/queue/route.ts.</td>
+</tr>
+<tr>
+  <td>13</td>
+  <td><code>GET()</code><br><small style="color:var(--muted)">agency/queue/route.ts</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td>External entry / no inbound edge</td>
+  <td><code>getRequestContext()</code><br><small style="color:var(--muted)">src/server/auth.ts</small><br><code>jsonError()</code><br><small style="color:var(--muted)">src/server/api.ts</small><br><code>listAgencyQueue()</code><br><small style="color:var(--muted)">src/server/agency-operations.ts</small></td>
+  <td>GET() node in agency/queue/route.ts.</td>
+</tr>
+<tr>
+  <td>14</td>
+  <td><code>agent-runs/route.ts</code><br><small style="color:var(--muted)">v1/agent-runs/route.ts</small></td>
+  <td><span class="tag tag-endpoint">API</span></td>
+  <td>External entry / no inbound edge</td>
+  <td><code>api.ts</code><br><small style="color:var(--muted)">src/server/api.ts</small><br><code>application::ref_next_server</code><br><code>auth.ts</code><br><small style="color:var(--muted)">src/server/auth.ts</small><br>+4 more</td>
+  <td>Module file in v1/agent-runs/route.ts.</td>
+</tr>
+<tr>
+  <td>15</td>
+  <td><code>GET()</code><br><small style="color:var(--muted)">v1/agent-runs/route.ts</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td>External entry / no inbound edge</td>
+  <td><code>getRequestContext()</code><br><small style="color:var(--muted)">src/server/auth.ts</small><br><code>jsonError()</code><br><small style="color:var(--muted)">src/server/api.ts</small></td>
+  <td>GET() node in v1/agent-runs/route.ts.</td>
+</tr>
+<tr>
+  <td>16</td>
+  <td><code>[keyId]/route.ts</code><br><small style="color:var(--muted)">api-keys/[keyId]/route.ts</small></td>
+  <td><span class="tag tag-endpoint">API</span></td>
+  <td>External entry / no inbound edge</td>
+  <td><code>api.ts</code><br><small style="color:var(--muted)">src/server/api.ts</small><br><code>ApiError</code><br><small style="color:var(--muted)">src/server/api.ts</small><br><code>application::ref_next_server</code><br>+6 more</td>
+  <td>Module file in api-keys/[keyId]/route.ts.</td>
+</tr>
+<tr>
+  <td>17</td>
+  <td><code>DELETE()</code><br><small style="color:var(--muted)">api-keys/[keyId]/route.ts</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td>External entry / no inbound edge</td>
+  <td><code>getRequestContext()</code><br><small style="color:var(--muted)">src/server/auth.ts</small><br><code>jsonError()</code><br><small style="color:var(--muted)">src/server/api.ts</small><br><code>requireRole()</code><br><small style="color:var(--muted)">src/server/auth.ts</small></td>
+  <td>DELETE() node in api-keys/[keyId]/route.ts.</td>
+</tr>
+<tr>
+  <td>18</td>
+  <td><code>api-keys/route.ts</code><br><small style="color:var(--muted)">v1/api-keys/route.ts</small></td>
+  <td><span class="tag tag-endpoint">API</span></td>
+  <td>External entry / no inbound edge</td>
+  <td><code>api.ts</code><br><small style="color:var(--muted)">src/server/api.ts</small><br><code>ApiError</code><br><small style="color:var(--muted)">src/server/api.ts</small><br><code>application::ref_next_server</code><br>+7 more</td>
+  <td>Module file in v1/api-keys/route.ts.</td>
+</tr>
+<tr>
+  <td>19</td>
+  <td><code>GET()</code><br><small style="color:var(--muted)">v1/api-keys/route.ts</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td>External entry / no inbound edge</td>
+  <td><code>getRequestContext()</code><br><small style="color:var(--muted)">src/server/auth.ts</small><br><code>jsonError()</code><br><small style="color:var(--muted)">src/server/api.ts</small><br><code>requireRole()</code><br><small style="color:var(--muted)">src/server/auth.ts</small></td>
+  <td>GET() node in v1/api-keys/route.ts.</td>
+</tr>
+<tr>
+  <td>20</td>
+  <td><code>POST()</code><br><small style="color:var(--muted)">v1/api-keys/route.ts</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td>External entry / no inbound edge</td>
+  <td><code>getRequestContext()</code><br><small style="color:var(--muted)">src/server/auth.ts</small><br><code>jsonError()</code><br><small style="color:var(--muted)">src/server/api.ts</small><br><code>requireRole()</code><br><small style="color:var(--muted)">src/server/auth.ts</small></td>
+  <td>POST() node in v1/api-keys/route.ts.</td>
+</tr>
+<tr>
+  <td>21</td>
+  <td><code>[assetId]/complete/route.ts</code><br><small style="color:var(--muted)">[assetId]/complete/route.ts</small></td>
+  <td><span class="tag tag-endpoint">API</span></td>
+  <td>External entry / no inbound edge</td>
+  <td><code>api.ts</code><br><small style="color:var(--muted)">src/server/api.ts</small><br><code>ApiError</code><br><small style="color:var(--muted)">src/server/api.ts</small><br><code>application::ref_next_server</code><br>+11 more</td>
+  <td>Module file in [assetId]/complete/route.ts.</td>
+</tr>
+<tr>
+  <td>22</td>
+  <td><code>POST()</code><br><small style="color:var(--muted)">[assetId]/complete/route.ts</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td>External entry / no inbound edge</td>
+  <td><code>getRequestContext()</code><br><small style="color:var(--muted)">src/server/auth.ts</small><br><code>jsonError()</code><br><small style="color:var(--muted)">src/server/api.ts</small><br><code>requireRole()</code><br><small style="color:var(--muted)">src/server/auth.ts</small><br>+2 more</td>
+  <td>POST() node in [assetId]/complete/route.ts.</td>
+</tr>
+<tr>
+  <td>23</td>
+  <td><code>DELETE()</code><br><small style="color:var(--muted)">[assetId]/complete/route.ts</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td>External entry / no inbound edge</td>
+  <td><code>deleteObject()</code><br><small style="color:var(--muted)">src/server/storage.ts</small><br><code>getRequestContext()</code><br><small style="color:var(--muted)">src/server/auth.ts</small><br><code>jsonError()</code><br><small style="color:var(--muted)">src/server/api.ts</small><br>+1 more</td>
+  <td>DELETE() node in [assetId]/complete/route.ts.</td>
+</tr>
+<tr>
+  <td>24</td>
+  <td><code>PATCH()</code><br><small style="color:var(--muted)">[assetId]/complete/route.ts</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td>External entry / no inbound edge</td>
+  <td><code>getRequestContext()</code><br><small style="color:var(--muted)">src/server/auth.ts</small><br><code>jsonError()</code><br><small style="color:var(--muted)">src/server/api.ts</small><br><code>requireRole()</code><br><small style="color:var(--muted)">src/server/auth.ts</small></td>
+  <td>PATCH() node in [assetId]/complete/route.ts.</td>
+</tr>
+<tr>
+  <td>25</td>
+  <td><code>download/route.ts</code><br><small style="color:var(--muted)">[assetId]/download/route.ts</small></td>
+  <td><span class="tag tag-endpoint">API</span></td>
+  <td>External entry / no inbound edge</td>
+  <td><code>api.ts</code><br><small style="color:var(--muted)">src/server/api.ts</small><br><code>ApiError</code><br><small style="color:var(--muted)">src/server/api.ts</small><br><code>application::ref_next_server</code><br>+7 more</td>
+  <td>Module file in [assetId]/download/route.ts.</td>
+</tr>
+<tr>
+  <td>26</td>
+  <td><code>GET()</code><br><small style="color:var(--muted)">[assetId]/download/route.ts</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td>External entry / no inbound edge</td>
+  <td><code>createDownloadUrl()</code><br><small style="color:var(--muted)">src/server/storage.ts</small><br><code>getRequestContext()</code><br><small style="color:var(--muted)">src/server/auth.ts</small><br><code>jsonError()</code><br><small style="color:var(--muted)">src/server/api.ts</small></td>
+  <td>GET() node in [assetId]/download/route.ts.</td>
+</tr>
+<tr>
+  <td>27</td>
+  <td><code>scan/route.ts</code><br><small style="color:var(--muted)">[assetId]/scan/route.ts</small></td>
+  <td><span class="tag tag-endpoint">API</span></td>
+  <td>External entry / no inbound edge</td>
+  <td><code>api.ts</code><br><small style="color:var(--muted)">src/server/api.ts</small><br><code>ApiError</code><br><small style="color:var(--muted)">src/server/api.ts</small><br><code>application::ref_next_server</code><br>+7 more</td>
+  <td>Module file in [assetId]/scan/route.ts.</td>
+</tr>
+<tr>
+  <td>28</td>
+  <td><code>POST()</code><br><small style="color:var(--muted)">[assetId]/scan/route.ts</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td>External entry / no inbound edge</td>
+  <td><code>getRequestContext()</code><br><small style="color:var(--muted)">src/server/auth.ts</small><br><code>jsonError()</code><br><small style="color:var(--muted)">src/server/api.ts</small><br><code>requireRole()</code><br><small style="color:var(--muted)">src/server/auth.ts</small><br>+2 more</td>
+  <td>POST() node in [assetId]/scan/route.ts.</td>
+</tr>
+<tr>
+  <td>29</td>
+  <td><code>assets/route.ts</code><br><small style="color:var(--muted)">v1/assets/route.ts</small></td>
+  <td><span class="tag tag-endpoint">API</span></td>
+  <td>External entry / no inbound edge</td>
+  <td><code>api.ts</code><br><small style="color:var(--muted)">src/server/api.ts</small><br><code>ApiError</code><br><small style="color:var(--muted)">src/server/api.ts</small><br><code>application::ref prisma client</code><br>+6 more</td>
+  <td>Module file in v1/assets/route.ts.</td>
+</tr>
+<tr>
+  <td>30</td>
+  <td><code>oneOf()</code><br><small style="color:var(--muted)">v1/assets/route.ts</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td>External entry / no inbound edge</td>
+  <td><code>GET()</code><br><small style="color:var(--muted)">v1/assets/route.ts</small></td>
+  <td>oneOf() node in v1/assets/route.ts.</td>
+</tr>
+</table>
+
+<div class="grid">
+  <div class="card">
+    <h4>Key Files</h4>
+    <table style="width:100%;font-size:0.85rem;">
+      <tr><th>File</th><th>Coverage</th></tr>
+      <tr><td><code>historyservice/v1/request_response.pb.go</code></td><td>1568 nodes</td></tr>
+<tr><td><code>adminservice/v1/request_response.pb.go</code></td><td>879 nodes</td></tr>
+<tr><td><code>matchingservice/v1/request_response.pb.go</code></td><td>871 nodes</td></tr>
+<tr><td><code>historyservice/v1/request_response.go-helpers.pb.go</code></td><td>821 nodes</td></tr>
+<tr><td><code>persistence/v1/executions.pb.go</code></td><td>644 nodes</td></tr>
+<tr><td><code>comfy_api_nodes/apis/__init__.py</code></td><td>581 nodes</td></tr>
+<tr><td><code>deployment/v1/message.pb.go</code></td><td>577 nodes</td></tr>
+<tr><td><code>history/interfaces/mutable_state_mock.go</code></td><td>547 nodes</td></tr>
+    </table>
+  </div>
+  <div class="card">
+    <h4>Design Notes</h4>
+    <p>This section comes from graphify community clustering. Relationship summary: references x72291, calls x70716, contains x54127, method x52558. The diagram prioritizes high-confidence calls or usage relationships; the table keeps the broader node inventory.</p>
+  </div>
+</div>
+<hr>
+
+<h2 id="stats">Project Statistics</h2>
+
+<div class="grid">
+  <div class="card">
+    <h4>Graph</h4>
+    <table style="width:100%;font-size:0.85rem;">
+      <tr><td>Nodes</td><td>139909</td></tr>
+      <tr><td>Edges</td><td>352997</td></tr>
+      <tr><td>Hyperedges</td><td>0</td></tr>
+      <tr><td>Communities</td><td>1</td></tr>
+      <tr><td>Documented Sections</td><td>1</td></tr>
+    </table>
+  </div>
+  <div class="card">
+    <h4>Edge Confidence</h4>
+    <table style="width:100%;font-size:0.85rem;">
+      <tr><td>EXTRACTED</td><td>336480</td></tr>
+      <tr><td>INFERRED</td><td>16517</td></tr>
+      <tr><td>AMBIGUOUS</td><td>0</td></tr>
+    </table>
+  </div>
+</div>
+
+<div style="text-align:center; padding:40px 0; color: var(--muted); font-size:0.9rem;">
+  <p>.graphify — Architecture Documentation</p>
+  <p>Generated: 2026-08-20 07:59 UTC · graphify callflow-html</p>
+</div>
+
+</div><!-- .container -->
+
+<script>
+(function () {
+  const mermaidConfig = {
+    startOnLoad: false,
+    theme: 'dark',
+    securityLevel: 'loose',
+    flowchart: { htmlLabels: true, useMaxWidth: true },
+    themeVariables: {
+      primaryColor: '#1e293b',
+      primaryTextColor: '#e2e8f0',
+      primaryBorderColor: '#38bdf8',
+      secondaryColor: '#0f172a',
+      tertiaryColor: '#334155',
+      lineColor: '#64748b',
+      textColor: '#e2e8f0',
+    }
+  };
+
+  mermaid.initialize(mermaidConfig);
+
+  function clamp(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+  }
+
+  function enhanceMermaidDiagrams() {
+    document.querySelectorAll('.mermaid').forEach((container) => {
+      if (container.dataset.zoomReady === 'true') return;
+      const svg = container.querySelector('svg');
+      if (!svg) return;
+
+      container.dataset.zoomReady = 'true';
+      container.classList.add('is-enhanced');
+
+      const viewport = document.createElement('div');
+      viewport.className = 'mermaid-viewport';
+      svg.parentNode.insertBefore(viewport, svg);
+      viewport.appendChild(svg);
+
+      const toolbar = document.createElement('div');
+      toolbar.className = 'mermaid-toolbar';
+      toolbar.innerHTML = [
+        '<button type="button" data-action="zoom-out" title="Zoom out">-</button>',
+        '<span class="zoom-level" data-role="level">100%</span>',
+        '<button type="button" data-action="zoom-in" title="Zoom in">+</button>',
+        '<button type="button" data-action="fit" title="Fit width">Fit</button>',
+        '<button type="button" data-action="reset" title="Reset view">Reset</button>'
+      ].join('');
+      container.insertBefore(toolbar, viewport);
+
+      const state = { scale: 1, x: 0, y: 0, dragging: false, startX: 0, startY: 0, originX: 0, originY: 0 };
+      const level = toolbar.querySelector('[data-role="level"]');
+
+      function applyTransform() {
+        svg.style.transform = `translate(${state.x}px, ${state.y}px) scale(${state.scale})`;
+        level.textContent = `${Math.round(state.scale * 100)}%`;
+      }
+
+      function zoomBy(delta) {
+        state.scale = clamp(state.scale + delta, 0.25, 3);
+        applyTransform();
+      }
+
+      function reset() {
+        state.scale = 1;
+        state.x = 0;
+        state.y = 0;
+        applyTransform();
+      }
+
+      function fitWidth() {
+        const rawWidth = svg.viewBox && svg.viewBox.baseVal && svg.viewBox.baseVal.width
+          ? svg.viewBox.baseVal.width
+          : svg.getBoundingClientRect().width / state.scale;
+        if (!rawWidth) {
+          reset();
+          return;
+        }
+        state.scale = clamp((viewport.clientWidth - 48) / rawWidth, 0.25, 1.4);
+        state.x = 0;
+        state.y = 0;
+        applyTransform();
+      }
+
+      toolbar.addEventListener('click', (event) => {
+        const button = event.target.closest('button[data-action]');
+        if (!button) return;
+        const action = button.dataset.action;
+        if (action === 'zoom-in') zoomBy(0.15);
+        if (action === 'zoom-out') zoomBy(-0.15);
+        if (action === 'fit') fitWidth();
+        if (action === 'reset') reset();
+      });
+
+      viewport.addEventListener('wheel', (event) => {
+        if (!event.ctrlKey && !event.metaKey) return;
+        event.preventDefault();
+        zoomBy(event.deltaY < 0 ? 0.1 : -0.1);
+      }, { passive: false });
+
+      viewport.addEventListener('pointerdown', (event) => {
+        if (event.button !== 0) return;
+        state.dragging = true;
+        state.startX = event.clientX;
+        state.startY = event.clientY;
+        state.originX = state.x;
+        state.originY = state.y;
+        viewport.classList.add('is-dragging');
+        viewport.setPointerCapture(event.pointerId);
+      });
+
+      viewport.addEventListener('pointermove', (event) => {
+        if (!state.dragging) return;
+        state.x = state.originX + event.clientX - state.startX;
+        state.y = state.originY + event.clientY - state.startY;
+        applyTransform();
+      });
+
+      function endDrag(event) {
+        if (!state.dragging) return;
+        state.dragging = false;
+        viewport.classList.remove('is-dragging');
+        if (viewport.hasPointerCapture(event.pointerId)) {
+          viewport.releasePointerCapture(event.pointerId);
+        }
+      }
+
+      viewport.addEventListener('pointerup', endDrag);
+      viewport.addEventListener('pointercancel', endDrag);
+      applyTransform();
+    });
+  }
+
+  function renderMermaid() {
+    const result = mermaid.run
+      ? mermaid.run({ querySelector: '.mermaid' })
+      : Promise.resolve();
+    Promise.resolve(result)
+      .then(enhanceMermaidDiagrams)
+      .catch((error) => {
+        console.error('Mermaid render failed:', error);
+        enhanceMermaidDiagrams();
+      });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', renderMermaid);
+  } else {
+    renderMermaid();
+  }
+})();
+</script>
+
+</body>
+</html>

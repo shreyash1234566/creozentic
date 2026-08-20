@@ -1,0 +1,728 @@
+"""
+Pixeltable UDFs for `ImageType`.
+
+Example:
+
+>>> import pixeltable as pxt
+>>> t = pxt.get_table(...)
+>>> t.select(t.img_col.convert('L')).collect()
+"""
+
+from typing import Any, Literal, Sequence, TypedDict
+
+import PIL.Image
+
+import pixeltable as pxt
+import pixeltable.utils.av as av_utils
+from pixeltable import exceptions as excs, type_system as ts
+from pixeltable.env import Env
+from pixeltable.exprs import Expr
+from pixeltable.utils.code import local_public_names
+from pixeltable.utils.image import to_base64
+from pixeltable.utils.local_store import TempStore
+
+from . import util
+
+
+@pxt.udf(is_method=True)
+def b64_encode(img: PIL.Image.Image, image_format: str = 'png') -> str:
+    """
+    Convert image to a base64-encoded string.
+
+    Args:
+        img: image
+        image_format: image format [supported by PIL](https://pillow.readthedocs.io/en/stable/handbook/image-file-formats.html#fully-supported-formats)
+    """
+    return to_base64(img, format=image_format)
+
+
+@pxt.udf(is_method=True)
+def alpha_composite(im1: PIL.Image.Image, im2: PIL.Image.Image) -> PIL.Image.Image:
+    """
+    Alpha composite `im2` over `im1`.
+
+    Equivalent to [`PIL.Image.alpha_composite()`](https://pillow.readthedocs.io/en/stable/reference/Image.html#PIL.Image.alpha_composite)
+    """
+    return PIL.Image.alpha_composite(im1, im2)
+
+
+@pxt.udf(is_method=True)
+def blend(im1: PIL.Image.Image, im2: PIL.Image.Image, alpha: float) -> PIL.Image.Image:
+    """
+    Return a new image by interpolating between two input images, using a constant alpha.
+
+    Equivalent to [`PIL.Image.blend()`](https://pillow.readthedocs.io/en/stable/reference/Image.html#PIL.Image.blend)
+    """
+    return PIL.Image.blend(im1, im2, alpha)
+
+
+@pxt.udf(is_method=True)
+def composite(image1: PIL.Image.Image, image2: PIL.Image.Image, mask: PIL.Image.Image) -> PIL.Image.Image:
+    """
+    Return a composite image by blending two images using a mask.
+
+    Equivalent to [`PIL.Image.composite()`](https://pillow.readthedocs.io/en/stable/reference/Image.html#PIL.Image.composite)
+    """
+    return PIL.Image.composite(image1, image2, mask)
+
+
+# PIL.Image.Image methods
+
+
+# Image.convert()
+@pxt.udf(is_method=True)
+def convert(self: PIL.Image.Image, mode: str) -> PIL.Image.Image:
+    """
+    Convert the image to a different mode.
+
+    Equivalent to
+    [`PIL.Image.Image.convert()`](https://pillow.readthedocs.io/en/stable/reference/Image.html#PIL.Image.Image.convert).
+
+    Args:
+        mode: The mode to convert to. See the
+            [Pillow documentation](https://pillow.readthedocs.io/en/stable/handbook/concepts.html#concept-modes)
+            for a list of supported modes.
+    """
+    return self.convert(mode)
+
+
+@convert.conditional_return_type
+def _(self: Expr, mode: str) -> ts.ColumnType:
+    input_type = self.col_type
+    assert isinstance(input_type, ts.ImageType)
+    return ts.ImageType(size=input_type.size, mode=mode, nullable=input_type.nullable)
+
+
+# Image.crop()
+@pxt.udf(is_method=True)
+def crop(self: PIL.Image.Image, box: tuple[int, int, int, int]) -> PIL.Image.Image:
+    """
+    Return a rectangular region from the image. The box is a 4-tuple defining the left, upper, right, and lower pixel
+    coordinates.
+
+    Equivalent to
+    [`PIL.Image.Image.crop()`](https://pillow.readthedocs.io/en/stable/reference/Image.html#PIL.Image.Image.crop)
+    """
+    return self.crop(box)
+
+
+@crop.conditional_return_type
+def _(self: Expr, box: tuple[int, int, int, int]) -> ts.ColumnType:
+    input_type = self.col_type
+    assert isinstance(input_type, ts.ImageType)
+    if (isinstance(box, (list, tuple))) and len(box) == 4 and all(isinstance(x, int) for x in box):
+        return ts.ImageType(size=(box[2] - box[0], box[3] - box[1]), mode=input_type.mode, nullable=input_type.nullable)
+    return ts.ImageType(mode=input_type.mode, nullable=input_type.nullable)  # we can't compute the size statically
+
+
+# Image.getchannel()
+@pxt.udf(is_method=True)
+def getchannel(self: PIL.Image.Image, channel: int) -> PIL.Image.Image:
+    """
+    Return an L-mode image containing a single channel of the original image.
+
+    Equivalent to
+    [`PIL.Image.Image.getchannel()`](https://pillow.readthedocs.io/en/stable/reference/Image.html#PIL.Image.Image.getchannel)
+
+    Args:
+        channel: The channel to extract. This is a 0-based index.
+    """
+    return self.getchannel(channel)
+
+
+@getchannel.conditional_return_type
+def _(self: Expr) -> ts.ColumnType:
+    input_type = self.col_type
+    assert isinstance(input_type, ts.ImageType)
+    return ts.ImageType(size=input_type.size, mode='L', nullable=input_type.nullable)
+
+
+@pxt.udf(is_method=True)
+def get_metadata(self: PIL.Image.Image) -> util.ImageMetadata:
+    """
+    Return metadata for the image.
+    """
+    return {
+        'width': self.width,
+        'height': self.height,
+        'mode': self.mode,
+        'bits': getattr(self, 'bits', None),
+        'format': self.format,
+    }
+
+
+# Image.point()
+@pxt.udf(is_method=True)
+def point(self: PIL.Image.Image, lut: list[int], mode: str | None = None) -> PIL.Image.Image:
+    """
+    Map image pixels through a lookup table.
+
+    Equivalent to
+    [`PIL.Image.Image.point()`](https://pillow.readthedocs.io/en/stable/reference/Image.html#PIL.Image.Image.point)
+
+    Args:
+        lut: A lookup table.
+    """
+    return self.point(lut, mode=mode)
+
+
+# Image.resize()
+@pxt.udf(is_method=True)
+def resize(self: PIL.Image.Image, size: tuple[int, int]) -> PIL.Image.Image:
+    """
+    Return a resized copy of the image. The size parameter is a tuple containing the width and height of the new image.
+
+    Equivalent to
+    [`PIL.Image.Image.resize()`](https://pillow.readthedocs.io/en/stable/reference/Image.html#PIL.Image.Image.resize)
+    """
+    return self.resize(tuple(size))  # type: ignore[arg-type]
+
+
+@resize.conditional_return_type
+def _(self: Expr, size: tuple[int, int]) -> ts.ColumnType:
+    input_type = self.col_type
+    assert isinstance(input_type, ts.ImageType)
+    return ts.ImageType(size=size, mode=input_type.mode, nullable=input_type.nullable)
+
+
+# Image.rotate()
+@pxt.udf(is_method=True)
+def rotate(self: PIL.Image.Image, angle: int) -> PIL.Image.Image:
+    """
+    Return a copy of the image rotated by the given angle.
+
+    Equivalent to
+    [`PIL.Image.Image.rotate()`](https://pillow.readthedocs.io/en/stable/reference/Image.html#PIL.Image.Image.rotate)
+
+    Args:
+        angle: The angle to rotate the image, in degrees. Positive angles are counter-clockwise.
+    """
+    return self.rotate(angle)
+
+
+@pxt.udf(is_method=True)
+def effect_spread(self: PIL.Image.Image, distance: int) -> PIL.Image.Image:
+    """
+    Randomly spread pixels in an image.
+
+    Equivalent to
+    [`PIL.Image.Image.effect_spread()`](https://pillow.readthedocs.io/en/stable/reference/Image.html#PIL.Image.Image.effect_spread)
+
+    Args:
+        distance: The distance to spread pixels.
+    """
+    return self.effect_spread(distance)
+
+
+@pxt.udf(is_method=True)
+def transpose(self: PIL.Image.Image, method: Literal[0, 1, 2, 3, 4, 5, 6]) -> PIL.Image.Image:
+    """
+    Transpose the image.
+
+    Equivalent to
+    [`PIL.Image.Image.transpose()`](https://pillow.readthedocs.io/en/stable/reference/Image.html#PIL.Image.Image.transpose)
+
+    Args:
+        method: The transpose method. See the
+            [Pillow documentation](https://pillow.readthedocs.io/en/stable/reference/Image.html#PIL.Image.Image.transpose)
+            for a list of supported methods.
+    """
+    return self.transpose(method)
+
+
+@rotate.conditional_return_type
+@effect_spread.conditional_return_type
+@transpose.conditional_return_type
+def _(self: Expr) -> ts.ColumnType:
+    return self.col_type
+
+
+@pxt.udf(is_method=True)
+def entropy(self: PIL.Image.Image, mask: PIL.Image.Image | None = None, extrema: list | None = None) -> float:
+    """
+    Returns the entropy of the image, optionally using a mask and extrema.
+
+    Equivalent to
+    [`PIL.Image.Image.entropy()`](https://pillow.readthedocs.io/en/stable/reference/Image.html#PIL.Image.Image.entropy)
+
+    Args:
+        mask: An optional mask image.
+        extrema: An optional list of extrema.
+    """
+    return self.entropy(mask, extrema)  # type: ignore[arg-type]
+
+
+@pxt.udf(is_method=True)
+def getbands(self: PIL.Image.Image) -> tuple[str, ...]:
+    """
+    Return a tuple containing the names of the image bands.
+
+    Equivalent to
+    [`PIL.Image.Image.getbands()`](https://pillow.readthedocs.io/en/stable/reference/Image.html#PIL.Image.Image.getbands)
+    """
+    return self.getbands()
+
+
+@pxt.udf(is_method=True)
+def getbbox(self: PIL.Image.Image, *, alpha_only: bool = True) -> tuple[int, int, int, int] | None:
+    """
+    Return a bounding box for the non-zero regions of the image.
+
+    Equivalent to [`PIL.Image.Image.getbbox()`](https://pillow.readthedocs.io/en/stable/reference/Image.html#PIL.Image.Image.getbbox)
+
+    Args:
+        alpha_only: If `True`, and the image has an alpha channel, trim transparent pixels. Otherwise,
+            trim pixels when all channels are zero.
+    """
+    return self.getbbox(alpha_only=alpha_only)
+
+
+@pxt.udf(is_method=True)
+def getcolors(self: PIL.Image.Image, maxcolors: int = 256) -> list[tuple[int, int]]:
+    """
+    Return a list of colors used in the image, up to a maximum of `maxcolors`.
+
+    Equivalent to
+    [`PIL.Image.Image.getcolors()`](https://pillow.readthedocs.io/en/stable/reference/Image.html#PIL.Image.Image.getcolors)
+
+    Args:
+        maxcolors: The maximum number of colors to return.
+    """
+    return self.getcolors(maxcolors)
+
+
+@pxt.udf(is_method=True)
+def getextrema(self: PIL.Image.Image) -> tuple[int, int]:
+    """
+    Return a 2-tuple containing the minimum and maximum pixel values of the image.
+
+    Equivalent to
+    [`PIL.Image.Image.getextrema()`](https://pillow.readthedocs.io/en/stable/reference/Image.html#PIL.Image.Image.getextrema)
+    """
+    return self.getextrema()
+
+
+@pxt.udf(is_method=True)
+def getpalette(self: PIL.Image.Image, mode: str | None = None) -> list[int] | None:
+    """
+    Return the palette of the image, optionally converting it to a different mode.
+
+    Equivalent to
+    [`PIL.Image.Image.getpalette()`](https://pillow.readthedocs.io/en/stable/reference/Image.html#PIL.Image.Image.getpalette)
+
+    Args:
+        mode: The mode to convert the palette to.
+    """
+    return self.getpalette(mode)
+
+
+@pxt.udf(is_method=True)
+def getpixel(self: PIL.Image.Image, xy: list) -> tuple[int]:
+    """
+    Return the pixel value at the given position. The position `xy` is a tuple containing the x and y coordinates.
+
+    Equivalent to
+    [`PIL.Image.Image.getpixel()`](https://pillow.readthedocs.io/en/stable/reference/Image.html#PIL.Image.Image.getpixel)
+
+    Args:
+        xy: The coordinates, given as (x, y).
+    """
+    # `xy` will be a list; `tuple(xy)` is necessary for pillow 9 compatibility
+    return self.getpixel(tuple(xy))
+
+
+@pxt.udf(is_method=True)
+def getprojection(self: PIL.Image.Image) -> tuple[list[int], list[int]]:
+    """
+    Return two sequences representing the horizontal and vertical projection of the image.
+
+    Equivalent to
+    [`PIL.Image.Image.getprojection()`](https://pillow.readthedocs.io/en/stable/reference/Image.html#PIL.Image.Image.getprojection)
+    """
+    return self.getprojection()
+
+
+@pxt.udf(is_method=True)
+def histogram(self: PIL.Image.Image, mask: PIL.Image.Image | None = None, extrema: list | None = None) -> list[int]:
+    """
+    Return a histogram for the image.
+
+    Equivalent to
+    [`PIL.Image.Image.histogram()`](https://pillow.readthedocs.io/en/stable/reference/Image.html#PIL.Image.Image.histogram)
+
+    Args:
+        mask: An optional mask image.
+        extrema: An optional list of extrema.
+    """
+    return self.histogram(mask, extrema)  # type: ignore[arg-type]
+
+
+@pxt.udf(is_method=True)
+def quantize(
+    self: PIL.Image.Image,
+    colors: int = 256,
+    method: Literal[0, 1, 2, 3] | None = None,
+    kmeans: int = 0,
+    palette: PIL.Image.Image | None = None,
+    dither: int = PIL.Image.Dither.FLOYDSTEINBERG,
+) -> PIL.Image.Image:
+    """
+     Convert the image to 'P' mode with the specified number of colors.
+
+     Equivalent to
+     [`PIL.Image.Image.quantize()`](https://pillow.readthedocs.io/en/stable/reference/Image.html#PIL.Image.Image.quantize)
+
+    Args:
+        colors: The number of colors to quantize to.
+        method: The quantization method. See the
+            [Pillow documentation](https://pillow.readthedocs.io/en/stable/reference/Image.html#PIL.Image.Image.quantize)
+            for a list of supported methods.
+        kmeans: The number of k-means clusters to use.
+        palette: The palette to use.
+        dither: The dithering method. See the
+            [Pillow documentation](https://pillow.readthedocs.io/en/stable/reference/Image.html#PIL.Image.Image.quantize)
+            for a list of supported methods.
+    """
+    return self.quantize(colors, method, kmeans, palette, dither)
+
+
+@pxt.udf(is_method=True)
+def reduce(self: PIL.Image.Image, factor: int, box: tuple[int, int, int, int] | None = None) -> PIL.Image.Image:
+    """
+    Reduce the image by the given factor.
+
+    Equivalent to
+    [`PIL.Image.Image.reduce()`](https://pillow.readthedocs.io/en/stable/reference/Image.html#PIL.Image.Image.reduce)
+
+    Args:
+        factor: The reduction factor.
+        box: An optional 4-tuple of ints providing the source image region to be reduced. The values must be within
+            (0, 0, width, height) rectangle. If omitted or None, the entire source is used.
+    """
+    return self.reduce(factor, box)
+
+
+@pxt.udf(is_method=True)
+def thumbnail(
+    self: PIL.Image.Image,
+    size: tuple[int, int],
+    resample: int = PIL.Image.Resampling.LANCZOS,
+    reducing_gap: float | None = 2.0,
+) -> PIL.Image.Image:
+    """
+    Create a thumbnail of the image.
+
+    Equivalent to
+    [`PIL.Image.Image.thumbnail()`](https://pillow.readthedocs.io/en/stable/reference/Image.html#PIL.Image.Image.thumbnail)
+
+    Args:
+        size: The size of the thumbnail, as a tuple of (width, height).
+        resample: The resampling filter to use. See the
+            [Pillow documentation](https://pillow.readthedocs.io/en/stable/reference/Image.html#PIL.Image.Image.thumbnail)
+            for a list of supported filters.
+        reducing_gap: The reducing gap to use.
+    """
+    result = self.copy()
+    result.thumbnail(size, PIL.Image.Resampling(resample), reducing_gap)
+    return result
+
+
+@pxt.udf(is_property=True)
+def width(self: PIL.Image.Image) -> int:
+    """
+    Return the width of the image.
+    """
+    return self.width
+
+
+@pxt.udf(is_property=True)
+def height(self: PIL.Image.Image) -> int:
+    """
+    Return the height of the image.
+    """
+    return self.height
+
+
+@pxt.udf(is_property=True)
+def mode(self: PIL.Image.Image) -> str:
+    """
+    Return the image mode.
+    """
+    return self.mode
+
+
+@pxt.udf(is_property=True)
+def size(self: PIL.Image.Image) -> tuple[int, int]:
+    """
+    Return the image size as a `[width, height]` list.
+
+    Equivalent to [`PIL.Image.Image.size`](https://pillow.readthedocs.io/en/stable/reference/Image.html#PIL.Image.Image.size).
+    """
+    # the annotation declares the fixed two-element schema; the runtime value must be a json value (a list),
+    # not a tuple, so that path expressions like size[0] evaluate against it
+    return list(self.size)  # type: ignore[return-value]
+
+
+class Tile(TypedDict):
+    tile: PIL.Image.Image
+    tile_coord: tuple[int, int]
+    tile_box: tuple[int, int, int, int]
+
+
+@pxt.iterator(unstored_cols=['tile'])
+class tile_iterator(pxt.PxtIterator[Tile]):
+    """
+    Iterator over tiles of an image. Each image will be divided into tiles of size `tile_size`, and the tiles will be
+    iterated over in row-major order (left-to-right, then top-to-bottom). An optional `overlap` parameter may be
+    specified. If the tiles do not exactly cover the image, then the rightmost and bottommost tiles will be padded with
+    blackspace, so that the output images all have the exact size `tile_size`.
+
+    __Outputs__:
+
+        One row per tile, with the following columns:
+
+        - `tile` (`pxt.Image`): The image tile
+        - `tile_coord` (`pxt.Json`): The (x, y) coordinates of the tile in the grid of tiles
+        - `tile_box` (`pxt.Json`): The (x1, y1, x2, y2) pixel coordinates of the tile in the original image
+
+    Args:
+        image: Image to split into tiles.
+        tile_size: Size of each tile, as a pair of integers `(width, height)`.
+        overlap: Amount of overlap between adjacent tiles, as a pair of integers `(width, height)`.
+
+    Examples:
+        This example assumes an existing table `tbl` with a column `img` of type `pxt.Image`.
+
+        Create a view that splits all images into 256x256 tiles with 32 pixels of overlap:
+
+        >>> pxt.create_view(
+        ...     'image_tiles',
+        ...     tbl,
+        ...     iterator=tile_iterator(
+        ...         tbl.img, tile_size=(256, 256), overlap=(32, 32)
+        ...     ),
+        ... )
+    """
+
+    __image: PIL.Image.Image
+    __tile_size: Sequence[int]
+    __overlap: Sequence[int]
+    __width: int
+    __height: int
+    __xlen: int
+    __ylen: int
+    __i: int
+    __j: int
+
+    def __init__(self, image: pxt.Image, tile_size: tuple[int, int], *, overlap: tuple[int, int] = (0, 0)) -> None:
+        self.__image = image
+        self.__image.load()
+        self.__tile_size = tile_size
+        self.__overlap = overlap
+        self.__width, self.__height = image.size
+        # Justification for this formula: let t = tile_size[0], o = overlap[0]. Then the values of w (= width) that
+        # exactly accommodate an integer number of tiles are t, 2t - o, 3t - 2o, 4t - 3o, ...
+        # This formula ensures that t, 2t - o, 3t - 2o, ... result in an xlen of 1, 2, 3, ...
+        # but t + 1, 2t - o + 1, 3t - 2o + 1, ... result in an xlen of 2, 3, 4, ...
+        self.__xlen = (self.__width - overlap[0] - 1) // (tile_size[0] - overlap[0]) + 1
+        self.__ylen = (self.__height - overlap[1] - 1) // (tile_size[1] - overlap[1]) + 1
+        self.__i = 0
+        self.__j = 0
+
+    def __next__(self) -> Tile:
+        if self.__j >= self.__ylen:
+            raise StopIteration
+
+        x1 = self.__i * (self.__tile_size[0] - self.__overlap[0])
+        y1 = self.__j * (self.__tile_size[1] - self.__overlap[1])
+        # If x2 > self.__width, PIL does the right thing and pads the image with blackspace
+        x2 = x1 + self.__tile_size[0]
+        y2 = y1 + self.__tile_size[1]
+        tile = self.__image.crop((x1, y1, x2, y2))
+
+        result: Tile = {'tile': tile, 'tile_coord': (self.__i, self.__j), 'tile_box': (x1, y1, x2, y2)}
+
+        self.__i += 1
+        if self.__i >= self.__xlen:
+            self.__i = 0
+            self.__j += 1
+
+        return result
+
+    def seek(self, pos: int, **kwargs: Any) -> None:
+        self.__j = pos // self.__xlen
+        self.__i = pos % self.__xlen
+
+    @classmethod
+    def validate(cls, bound_args: dict[str, Any]) -> None:
+        tile_size = bound_args.get('tile_size')
+        overlap = bound_args.get('overlap', (0, 0))
+        if tile_size[0] <= 0 or tile_size[1] <= 0:
+            raise excs.RequestError(
+                excs.ErrorCode.INVALID_ARGUMENT, f'`tile_size` dimensions must be positive; got {tile_size}'
+            )
+        if overlap[0] < 0 or overlap[1] < 0:
+            raise excs.RequestError(
+                excs.ErrorCode.INVALID_ARGUMENT, f'`overlap` dimensions must be non-negative; got {overlap}'
+            )
+        if overlap[0] >= tile_size[0] or overlap[1] >= tile_size[1]:
+            raise excs.RequestError(
+                excs.ErrorCode.UNSUPPORTED_OPERATION,
+                f'`overlap` dimensions {overlap} are not strictly smaller than `tile_size` {tile_size}',
+            )
+
+
+@pxt.uda(requires_order_by=True)
+class stitch_tiles(pxt.Aggregator):
+    """
+    Reconstructs a single image from the tiles produced by [`tile_iterator`][pixeltable.functions.image.tile_iterator],
+    pasting each tile back at its original position. This is the inverse of
+    [`tile_iterator`][pixeltable.functions.image.tile_iterator]:  aggregate the tiles of an image (grouped by a column
+    that identifies the source image) to obtain the full image, optionally after transforming each tile first
+    (e.g., drawing a segmentation overlay on it).
+
+    The reconstruction is naive: tiles are pasted in the order they arrive, so where tiles overlap, later tiles
+    overwrite earlier ones. It composites pixels and does not merge or deduplicate detections across tile seams.
+
+    Args:
+        tile: The image tile to paste, the same size as the tiles emitted by
+        [`tile_iterator`][pixeltable.functions.image.tile_iterator]. All tiles in a group must have the same mode
+            (and palette, for palette images).
+        tile_box: The `(x1, y1, x2, y2)` pixel coordinates of the tile in the original image, as emitted by
+            `tile_iterator`.
+        width: The width of the original image, in pixels.
+        height: The height of the original image, in pixels.
+
+    Returns:
+        The reconstructed image, of size `(width, height)` and in the mode of the tiles, or `None` if there
+        are no non-null tiles.
+
+    Examples:
+        Split each image into tiles, draw a segmentation overlay on every tile, then stitch the overlaid tiles
+        back into a single full-resolution image, one per source image. Assumes a view `tiles` created with
+        [`tile_iterator`][pixeltable.functions.image.tile_iterator], with an `overlay` column computed per tile:
+
+        >>> tiles.group_by(tiles.image).select(
+        ...     stitched=stitch_tiles(
+        ...         tiles.pos,
+        ...         tiles.overlay,
+        ...         tiles.tile_box,
+        ...         tiles.image.width,
+        ...         tiles.image.height,
+        ...     )
+        ... ).collect()
+    """
+
+    canvas: PIL.Image.Image | None
+
+    def __init__(self) -> None:
+        self.canvas = None
+
+    def update(self, tile: PIL.Image.Image, tile_box: tuple[int, int, int, int], width: int, height: int) -> None:
+        if self.canvas is None:
+            self.canvas = PIL.Image.new(tile.mode, (width, height))
+            palette = tile.getpalette()
+            if palette is not None:
+                self.canvas.putpalette(palette)
+
+        if self.canvas.size != (width, height):
+            raise excs.RequestError(
+                excs.ErrorCode.INVALID_ARGUMENT,
+                f'stitch_tiles(): width/height ({width}, {height}) does not match the size {self.canvas.size} '
+                'of previous tiles in the group',
+            )
+
+        if tile.mode != self.canvas.mode:
+            raise excs.RequestError(
+                excs.ErrorCode.INVALID_ARGUMENT,
+                f'stitch_tiles(): tile mode {tile.mode} does not match the mode {self.canvas.mode} '
+                'of previous tiles in the group',
+            )
+
+        if tile.getpalette() != self.canvas.getpalette():
+            raise excs.RequestError(
+                excs.ErrorCode.INVALID_ARGUMENT,
+                'stitch_tiles(): tile palette does not match the palette of previous tiles in the group',
+            )
+        # Tiles that extend past the original image (the padding `tile_iterator` adds to edge tiles) are clipped
+        # by `paste`, so the padding never appears in the result.
+        self.canvas.paste(tile, (int(tile_box[0]), int(tile_box[1])))
+
+    def value(self) -> PIL.Image.Image | None:
+        return self.canvas
+
+
+@pxt.udf(is_method=True)
+def to_video(
+    image: pxt.Image,
+    *,
+    duration: float,
+    fps: int = 24,
+    video_encoder: str | None = None,
+    video_encoder_args: dict[str, Any] | None = None,
+) -> pxt.Video:
+    """
+    Convert a still image into a video of a specified duration with ffmpeg's `-loop` option.
+
+    __Requirements:__
+
+    - `ffmpeg` needs to be installed and in PATH
+
+    Args:
+        image: Input image to convert to video.
+        duration: Duration of the output video in seconds.
+        fps: Frames per second for the output video.
+        video_encoder: Video encoder to use. If not specified, uses the default encoder.
+        video_encoder_args: Additional arguments to pass to the video encoder.
+
+    Returns:
+        A video displaying the input image for the specified duration.
+
+    Examples:
+        Create a 5-second video from an image:
+
+        >>> tbl.select(tbl.image.to_video(duration=5.0)).collect()
+
+        Create a 10-second video at 30 fps from a rotated image:
+
+        >>> tbl.select(
+        ...     tbl.image.rotate(180).to_video(duration=10.0, fps=30)
+        ... ).collect()
+    """
+    Env.get().require_binary('ffmpeg')
+    if duration <= 0:
+        raise excs.RequestError(excs.ErrorCode.INVALID_ARGUMENT, f'duration must be positive, got {duration}')
+    if fps <= 0:
+        raise excs.RequestError(excs.ErrorCode.INVALID_ARGUMENT, f'fps must be positive, got {fps}')
+
+    # ffmpeg needs file input
+    image_path = str(TempStore.create_path(extension='.png'))
+    image.convert('RGB').save(image_path)
+
+    output_path = str(TempStore.create_path(extension='.mp4'))
+    # Scale to even dimensions (required by most codecs like libx264)
+    even_filter = 'scale=trunc(iw/2)*2:trunc(ih/2)*2'
+    cmd = [
+        '-loop',
+        '1',
+        '-i',
+        image_path,
+        '-vf',
+        even_filter,
+        '-t',
+        str(duration),
+        '-r',
+        str(fps),
+        '-pix_fmt',
+        'yuv420p',
+    ]
+    return av_utils.run_ffmpeg_cmdline(
+        cmd, output_path, encode_video=True, video_encoder=video_encoder, video_encoder_args=video_encoder_args
+    )
+
+
+__all__ = local_public_names(__name__)
+
+
+def __dir__() -> list[str]:
+    return __all__

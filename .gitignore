@@ -15,3 +15,25 @@ logs/
 *.log
 .claude-replay.*
 .tmp-*
+
+# Source-first third-party worker environments and local fixtures
+third_party/*/.venv/
+.source-first-fixtures/
+third_party/*/.source-first-output*
+
+# Large/generated Graphify artifacts and local worker environments
+/docs/graphify-final/graph.json
+/docs/graphify-batches/**/graph.json
+/third_party/**/.git/
+/third_party/**/.venv/
+/third_party/**/venv/
+/third_party/**/node_modules/
+/third_party/**/__pycache__/
+/third_party/**/.pytest_cache/
+/third_party/**/.mypy_cache/
+/third_party/**/*.pyc
+/third_party/**/*.pyo
+/third_party/**/*.mp4
+/third_party/**/*.mkv
+/third_party/**/*.mov
+/third_party/**/*.webm

@@ -1,0 +1,96 @@
+{
+  "generated_from": "third_party checkout before vendoring cleanup",
+  "repositories": [
+    {
+      "directory": "ai-broll",
+      "origin": "https://github.com/Anil-matcha/AI-B-roll.git",
+      "commit": "e7d1b44afe23b221e6e58756dbfddc3316c05f1d",
+      "source_path": "third_party/ai-broll"
+    },
+    {
+      "directory": "ave",
+      "origin": "https://github.com/poseljacob/agentic-video-editor.git",
+      "commit": "47248b577046b0563e57e78edad86a3106c6faab",
+      "source_path": "third_party/ave"
+    },
+    {
+      "directory": "comfyui",
+      "origin": "https://github.com/Comfy-Org/ComfyUI.git",
+      "commit": "c67885b14556cf3e4e061862925282d403d09862",
+      "source_path": "third_party/comfyui"
+    },
+    {
+      "directory": "cutscript",
+      "origin": "https://github.com/DataAnts-AI/CutScript.git",
+      "commit": "e5c47e31b39a4178ff3e86a9bd69eb908b7b8bb5",
+      "source_path": "third_party/cutscript"
+    },
+    {
+      "directory": "funclip",
+      "origin": "https://github.com/modelscope/FunClip.git",
+      "commit": "51557f3683a2c56d751af377f2e8a58ce9a1ab13",
+      "source_path": "third_party/funclip"
+    },
+    {
+      "directory": "openchatcut",
+      "origin": "https://github.com/0xsline/OpenChatCut.git",
+      "commit": "f94d9112ea4649cc414b856afa3add34f8e5bd8f",
+      "source_path": "third_party/openchatcut"
+    },
+    {
+      "directory": "openmontage",
+      "origin": "https://github.com/calesthio/OpenMontage.git",
+      "commit": "1bab711820828c2e5fc1f87ed274a32587cb048f",
+      "source_path": "third_party/openmontage"
+    },
+    {
+      "directory": "openshorts",
+      "origin": "https://github.com/mutonby/openshorts.git",
+      "commit": "3cff7e8cd696d0875309dc52ab48e9c86f45c972",
+      "source_path": "third_party/openshorts"
+    },
+    {
+      "directory": "pixeltable",
+      "origin": "https://github.com/pixeltable/pixeltable.git",
+      "commit": "9f8ab10723c4d98f3661554811f8cce3acecda3d",
+      "source_path": "third_party/pixeltable"
+    },
+    {
+      "directory": "temporal",
+      "origin": "https://github.com/temporalio/temporal.git",
+      "commit": "fb8894cfcc0a511b06146d291f673f715df3b51a",
+      "source_path": "third_party/temporal"
+    },
+    {
+      "directory": "twick",
+      "origin": "https://github.com/ncounterspecialist/twick.git",
+      "commit": "3044c23e282b87c639c3f0b3fd5fb3fd972aa04c",
+      "source_path": "third_party/twick"
+    },
+    {
+      "directory": "videoagent",
+      "origin": "https://github.com/HKUDS/VideoAgent.git",
+      "commit": "f207987e3cffb554aaa6ffdbe733efb30f4b51ed",
+      "source_path": "third_party/videoagent"
+    },
+    {
+      "directory": "videoclipper",
+      "origin": "https://github.com/imgly/videoclipper.git",
+      "commit": "01e6e7a09721feca9b5d9a3208cca45645b98848",
+      "source_path": "third_party/videoclipper"
+    },
+    {
+      "directory": "videodb-director",
+      "origin": "https://github.com/video-db/Director.git",
+      "commit": "70e0b3dfdf59c679a25f4bea511e3cc4c5f2457f",
+      "source_path": "third_party/videodb-director"
+    },
+    {
+      "directory": "vimax",
+      "origin": "https://github.com/HKUDS/ViMax.git",
+      "commit": "05a48943878312d88fe5a016c12a9654940ecc43",
+      "source_path": "third_party/vimax"
+    }
+  ],
+  "note": "FFmpeg is the sixteenth ledger capability but is a system dependency, not a third_party repository."
+}

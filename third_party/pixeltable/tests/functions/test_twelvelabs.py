@@ -1,0 +1,106 @@
+import pytest
+
+import pixeltable as pxt
+from pixeltable.functions.audio import audio_splitter
+from pixeltable.functions.video import video_splitter
+
+from ..utils import (
+    get_audio_files,
+    get_image_files,
+    get_video_files,
+    rerun_on_network_error,
+    skip_test_if_no_client,
+    skip_test_if_not_installed,
+    validate_update_status,
+)
+
+pytestmark = pytest.mark.local('UDF/integration test')
+
+
+@pytest.mark.remote_api
+@pytest.mark.very_expensive
+@rerun_on_network_error()
+class TestTwelveLabs:
+    def test_embed_text(self, uses_db: None) -> None:
+        skip_test_if_not_installed('twelvelabs')
+        skip_test_if_no_client('twelvelabs')
+        from pixeltable.functions.twelvelabs import embed
+
+        t = pxt.create_table('test_tbl', {'input': pxt.String | None, 'image': pxt.Image | None})
+        t.add_computed_column(embed=embed(model_name='marengo3.0', text=t.input, image=t.image))
+        images = get_image_files()
+        rows = [
+            {'input': 'Twelve Labs provides multimodal embedding models.', 'image': None},
+            {'input': 'An optional image can be specified with text embeddings.', 'image': images[0]},
+        ]
+        validate_update_status(t.insert(rows), 2)
+        res = t.select(t.embed).collect()
+        assert res['embed'][0].shape == (512,)
+
+        t.add_embedding_index(t.input, embedding=embed.using(model_name='marengo3.0'))
+        res = t.select(embedding=t.input.embedding()).collect()
+        assert res['embedding'][0].shape == (512,)
+
+    def test_embed_image(self, uses_db: None) -> None:
+        skip_test_if_not_installed('twelvelabs')
+        skip_test_if_no_client('twelvelabs')
+        from pixeltable.functions.twelvelabs import embed
+
+        image_filepaths = get_image_files()[:2]
+        t = pxt.create_table('image_tbl', {'image': pxt.Image | None})
+        t.add_computed_column(embed=embed(model_name='marengo3.0', image=t.image))
+        validate_update_status(t.insert({'image': p} for p in image_filepaths), expected_rows=len(image_filepaths))
+        res = t.select(t.embed).collect()
+        assert res['embed'][0].shape == (512,)
+
+        t.add_embedding_index(t.image, embedding=embed.using(model_name='marengo3.0'))
+        res = t.select(embedding=t.image.embedding()).collect()
+        assert res['embedding'][0].shape == (512,)
+
+    def test_embed_audio(self, uses_db: None) -> None:
+        skip_test_if_not_installed('twelvelabs')
+        skip_test_if_no_client('twelvelabs')
+        from pixeltable.functions.twelvelabs import embed
+
+        audio_filepaths = get_audio_files()
+        base_t = pxt.create_table('audio_tbl', {'audio': pxt.Audio | None})
+        validate_update_status(base_t.insert({'audio': p} for p in audio_filepaths[:1]), expected_rows=1)
+        v = pxt.create_view(
+            'audio_segments',
+            base_t,
+            # Twelvelabs models require a minimum audio duration of 4 seconds
+            iterator=audio_splitter(base_t.audio, duration=5.0, min_segment_duration=4.0),
+        )
+        v.add_embedding_index(v.audio_segment, embedding=embed.using(model_name='marengo3.0'))
+        res = v.select(embedding=v.audio_segment.embedding()).collect()
+        assert res['embedding'][0].shape == (512,)
+
+    def test_embed_video(self, uses_db: None) -> None:
+        skip_test_if_not_installed('twelvelabs')
+        skip_test_if_no_client('twelvelabs')
+        from pixeltable.functions.twelvelabs import embed
+
+        video_filepaths = get_video_files()[:1]  # Just send one of them for testing
+        base_t = pxt.create_table('video_tbl', {'video': pxt.Video | None})
+        validate_update_status(base_t.insert({'video': p} for p in video_filepaths), expected_rows=len(video_filepaths))
+        v = pxt.create_view(
+            'video_segments',
+            base_t,
+            iterator=video_splitter(video=base_t.video, duration=5.0, min_segment_duration=4.0),
+        )
+        v.add_embedding_index(v.video_segment, embedding=embed.using(model_name='marengo3.0'))
+        res = v.select(embedding=v.video_segment.embedding()).collect()
+        assert res['embedding'][0].shape == (512,)
+
+    @pytest.mark.skip(reason='feature broken: PXT-1234')
+    def test_embed_large_media(self, uses_db: None) -> None:
+        skip_test_if_not_installed('twelvelabs')
+        skip_test_if_no_client('twelvelabs')
+        from pixeltable.functions.twelvelabs import embed
+
+        # Test that large media files that require multipart upload can be embedded successfully
+        t = pxt.create_table('large_media_tbl', {'video': pxt.Video | None})
+        t.insert(video='s3://pxt-test/pytest-resources/large_videos/6mb.mp4')
+        t.add_embedding_index(t.video, embedding=embed.using(model_name='marengo3.0'))
+        res = t.select(embedding=t.video.embedding()).collect()
+        assert res['embedding'][0].shape == (512,)

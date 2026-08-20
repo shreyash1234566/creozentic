@@ -1,0 +1,410 @@
+name: Publish to NPM
+
+permissions:
+  contents: read
+  id-token: write
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 8.15.4
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          # Remove 'v' prefix from tag (e.g., v0.14.0 -> 0.14.0)
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Extracted version: $VERSION"
+
+      - name: Update package versions
+        run: |
+          # Update all package.json files in packages directory
+          find packages -name "package.json" -type f | while read file; do
+            echo "Updating version in $file to ${{ steps.version.outputs.version }}"
+            # Use jq to update the version field
+            jq --arg version "${{ steps.version.outputs.version }}" '.version = $version' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+          done
+          
+          # Also update the root package.json version
+          jq --arg version "${{ steps.version.outputs.version }}" '.version = $version' package.json > package.json.tmp && mv package.json.tmp package.json
+          
+          # Update root package.json pnpm.overrides if it contains @twick packages
+          echo "Updating pnpm.overrides in root package.json..."
+          jq --arg version "${{ steps.version.outputs.version }}" '
+            if .pnpm.overrides then
+              .pnpm.overrides |= with_entries(
+                if .key | startswith("@twick/") then
+                  .value = "^" + $version
+                else
+                  .
+                end
+              )
+            else
+              .
+            end
+          ' package.json > package.json.tmp && mv package.json.tmp package.json
+
+      - name: Update internal dependencies
+        run: |
+          # Helper function to update @twick/* dependencies to new version
+          # This handles both workspace:* and versioned dependencies (e.g., ^0.14.11)
+          update_twick_version() {
+            local file=$1
+            local version=$2
+            jq --arg version "$version" '
+              # Helper function to update @twick/* dependencies
+              # Handles workspace:*, versioned (^0.14.18, ~0.14.18), and exact versions
+              def update_twick_deps(deps):
+                if deps then
+                  deps | with_entries(
+                    if .key | startswith("@twick/") then
+                      # Convert to string for processing
+                      (.value | tostring) as $val |
+                      if $val == "workspace:*" then
+                        # workspace:* → exact version
+                        .value = $version
+                      elif ($val | startswith("workspace:")) then
+                        # workspace:^x.y.z or workspace:~x.y.z → exact version (for publishing)
+                        .value = $version
+                      elif ($val | startswith("^")) then
+                        # ^0.14.18 → ^<new-version> (preserve caret)
+                        .value = "^" + $version
+                      elif ($val | startswith("~")) then
+                        # ~0.14.18 → ~<new-version> (preserve tilde)
+                        .value = "~" + $version
+                      elif ($val | startswith(">=")) then
+                        # >=0.14.18 → >=<new-version>
+                        .value = ">=" + $version
+                      elif ($val | startswith("<=")) then
+                        # <=0.14.18 → <=<new-version>
+                        .value = "<=" + $version
+                      elif ($val | startswith(">")) then
+                        # >0.14.18 → ><new-version>
+                        .value = ">" + $version
+                      elif ($val | startswith("<")) then
+                        # <0.14.18 → <<new-version>
+                        .value = "<" + $version
+                      elif ($val | test("^[0-9]")) then
+                        # 0.14.18 → <new-version> (exact version)
+                        .value = $version
+                      else
+                        # Fallback: use exact version
+                        .value = $version
+                      end
+                    else
+                      .
+                    end
+                  )
+                else
+                  deps
+                end;
+              
+              # Update all dependency fields
+              (if .dependencies then .dependencies = update_twick_deps(.dependencies) else . end) |
+              (if .devDependencies then .devDependencies = update_twick_deps(.devDependencies) else . end) |
+              (if .peerDependencies then .peerDependencies = update_twick_deps(.peerDependencies) else . end) |
+              (if .optionalDependencies then .optionalDependencies = update_twick_deps(.optionalDependencies) else . end)
+            ' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+          }
+          
+          # Update internal dependencies in all package.json files
+          echo "Updating @twick/* dependencies to version ${{ steps.version.outputs.version }}..."
+          find packages -name "package.json" -type f | while read file; do
+            echo "Updating internal dependencies in $file"
+            update_twick_version "$file" "${{ steps.version.outputs.version }}"
+          done
+          
+          # Also update root package.json if it has @twick dependencies
+          if jq -e '.dependencies | keys[] | select(startswith("@twick/"))' package.json > /dev/null 2>&1 || \
+             jq -e '.devDependencies | keys[] | select(startswith("@twick/"))' package.json > /dev/null 2>&1 || \
+             jq -e '.peerDependencies | keys[] | select(startswith("@twick/"))' package.json > /dev/null 2>&1; then
+            echo "Updating internal dependencies in root package.json"
+            update_twick_version "package.json" "${{ steps.version.outputs.version }}"
+          fi
+
+      - name: Verify version consistency
+        run: |
+          # Verify all @twick packages have the same version
+          echo "Verifying version consistency across all @twick packages..."
+          TARGET_VERSION="${{ steps.version.outputs.version }}"
+          ERRORS=0
+          
+          # Check package versions
+          find packages -name "package.json" -type f | while read file; do
+            PACKAGE_NAME=$(jq -r '.name' "$file")
+            if [[ "$PACKAGE_NAME" == @twick/* ]]; then
+              PACKAGE_VERSION=$(jq -r '.version' "$file")
+              if [ "$PACKAGE_VERSION" != "$TARGET_VERSION" ]; then
+                echo "❌ ERROR: $PACKAGE_NAME has version $PACKAGE_VERSION, expected $TARGET_VERSION"
+                ERRORS=1
+              else
+                echo "✓ $PACKAGE_NAME: $PACKAGE_VERSION"
+              fi
+            fi
+          done
+          
+          # Check root package.json version
+          ROOT_VERSION=$(jq -r '.version' package.json)
+          if [ "$ROOT_VERSION" != "$TARGET_VERSION" ]; then
+            echo "❌ ERROR: Root package.json has version $ROOT_VERSION, expected $TARGET_VERSION"
+            ERRORS=1
+          else
+            echo "✓ Root package.json: $ROOT_VERSION"
+          fi
+          
+          if [ $ERRORS -eq 1 ]; then
+            echo "❌ Version consistency check failed!"
+            exit 1
+          fi
+          
+          echo "✅ All @twick packages have version $TARGET_VERSION"
+
+      - name: Regenerate lockfile
+        run: |
+          # Regenerate lockfile after updating package versions and dependencies
+          echo "Regenerating pnpm-lock.yaml with updated versions..."
+          pnpm install --no-frozen-lockfile
+          echo "✓ Lockfile regenerated"
+
+      - name: Clean workspace dependencies
+        run: |
+          # Clean workspace: prefixes from dependencies for publishing
+          echo "Cleaning workspace dependencies for publishing..."
+          
+          # Check if the script exists
+          if [ ! -f "scripts/action-for-publish.js" ]; then
+            echo "Error: scripts/action-for-publish.js not found"
+            exit 1
+          fi
+          
+          # Run the workspace dependency cleanup script
+          if ! node scripts/action-for-publish.js; then
+            echo "Error: Failed to clean workspace dependencies"
+            exit 1
+          fi
+
+      - name: Regenerate lockfile after cleaning
+        run: |
+          # Regenerate lockfile after cleaning workspace: prefixes
+          # This ensures lockfile matches the cleaned dependencies for publishing
+          echo "Regenerating pnpm-lock.yaml after cleaning workspace dependencies..."
+          pnpm install --no-frozen-lockfile
+          echo "✓ Lockfile regenerated with cleaned dependencies"
+
+      - name: Build all packages
+        run: pnpm build
+
+      - name: Verify builds
+        run: |
+          # Check that all packages have dist folders (excluding documentation, examples, examples-cra)
+          # This handles both top-level and nested packages (e.g., cloud-functions/*, agents/*)
+          find packages -name "package.json" -type f | while read pkg_file; do
+            package_dir=$(dirname "$pkg_file")
+            package_name=$(jq -r '.name' "$pkg_file")
+            package_dirname=$(basename "$package_dir")
+            
+            # Skip documentation, examples, and examples-cra packages (these are not published)
+            if [ "$package_dirname" = "documentation" ] || [ "$package_dirname" = "examples" ] || [ "$package_dirname" = "examples-cra" ]; then
+              echo "⏭️  Skipping $package_dirname package (not published)"
+              continue
+            fi
+            
+            # Check if package has a build script - if not, dist might not be required
+            if jq -e '.scripts.build' "$pkg_file" > /dev/null 2>&1; then
+              if [ ! -d "$package_dir/dist" ]; then
+                echo "❌ ERROR: $package_name is missing dist folder (expected at $package_dir/dist)"
+                exit 1
+              fi
+              echo "✓ $package_name built successfully"
+            else
+              echo "⏭️  Skipping $package_name (no build script)"
+            fi
+          done
+
+      - name: Security validation
+        run: |
+          # Check for potentially dangerous scripts in package.json files (excluding documentation, examples, examples-cra)
+          # This handles both top-level and nested packages
+          echo "Validating package security..."
+          
+          find packages -name "package.json" -type f | while read pkg_file; do
+            package_dir=$(dirname "$pkg_file")
+            package_name=$(jq -r '.name' "$pkg_file")
+            package_dirname=$(basename "$package_dir")
+            
+            # Skip documentation, examples, and examples-cra packages (these are not published)
+            if [ "$package_dirname" = "documentation" ] || [ "$package_dirname" = "examples" ] || [ "$package_dirname" = "examples-cra" ]; then
+              echo "⏭️  Skipping $package_dirname package security check (not published)"
+              continue
+            fi
+            
+            # Check for postinstall scripts (security risk)
+            if jq -e '.scripts.postinstall' "$pkg_file" > /dev/null 2>&1; then
+              echo "SECURITY WARNING: $package_name has a postinstall script"
+              echo "This is a security risk and will be ignored during publishing"
+            fi
+            
+            # Check for other potentially dangerous scripts
+            DANGEROUS_SCRIPTS=("preinstall" "install" "postinstall" "preuninstall" "uninstall" "postuninstall" "prepublish" "prepublishOnly" "prepack" "postpack")
+            
+            for script in "${DANGEROUS_SCRIPTS[@]}"; do
+              if jq -e ".scripts.$script" "$pkg_file" > /dev/null 2>&1; then
+                echo "⚠️  WARNING: $package_name has a $script script"
+              fi
+            done
+            
+            echo "✓ $package_name security check completed"
+          done
+
+      - name: Determine publish order
+        id: publish-order
+        run: |
+          # Use our custom script to determine dependency-aware publish order
+          echo "Determining publish order based on dependencies..."
+          
+          # Check if the script exists
+          if [ ! -f "scripts/get-publish-order.js" ]; then
+            echo "Error: scripts/get-publish-order.js not found"
+            exit 1
+          fi
+          
+          # Run the dependency analysis script
+          SCRIPT_OUTPUT=$(node scripts/get-publish-order.js 2>&1)
+          if [ $? -ne 0 ]; then
+            echo "Error running get-publish-order.js:"
+            echo "$SCRIPT_OUTPUT"
+            echo "Using fallback order"
+            PUBLISH_ORDER="media-utils canvas timeline effects ai-models workflow live-player visualizer video-editor render-server ffmpeg-web browser-render studio"
+          else
+            PUBLISH_ORDER=$(echo "$SCRIPT_OUTPUT" | grep "Publish order string:" | cut -d: -f2 | xargs)
+            
+            # Fallback order if script fails to output expected format
+            if [ -z "$PUBLISH_ORDER" ]; then
+              echo "Warning: Could not determine dependency order, using fallback order"
+              PUBLISH_ORDER="media-utils canvas timeline effects ai-models workflow live-player visualizer video-editor render-server ffmpeg-web browser-render"
+            fi
+          fi
+          
+          # Ensure all cloud functions are included (nested packages)
+          for cloud_func in cloud-functions/export-video cloud-functions/transcript cloud-functions/subtitle-video; do
+            if [[ ! " $PUBLISH_ORDER " =~ " $cloud_func " ]]; then
+              PUBLISH_ORDER="$PUBLISH_ORDER $cloud_func"
+            fi
+          done
+          
+          echo "Publish order: $PUBLISH_ORDER"
+          echo "publish-order=$PUBLISH_ORDER" >> $GITHUB_OUTPUT
+
+      - name: Publish packages to NPM
+        run: |
+          # Publish packages in dependency order with security flags
+          VERSION="${{ steps.version.outputs.version }}"
+          
+          for package in ${{ steps.publish-order.outputs.publish-order }}; do
+            if [ -d "packages/$package" ] && [ -f "packages/$package/package.json" ]; then
+              package_name=$(jq -r '.name' "packages/$package/package.json")
+              echo "Processing $package_name (from $package)..."
+              cd "packages/$package"
+
+              # Check if version is already published
+              VERSION_EXISTS=false
+              if npm view "$package_name@$VERSION" version > /dev/null 2>&1; then
+                VERSION_EXISTS=true
+                echo "ℹ️  Version $VERSION is already published for $package_name"
+                echo "Skipping publish step, will only update tags if needed..."
+              else
+                echo "Version $VERSION not found, will publish..."
+              fi
+
+              if [ "$VERSION_EXISTS" = false ]; then
+                # Only build if we're going to publish
+                if jq -e '.scripts.build' package.json > /dev/null 2>&1; then
+                  echo "Building $package_name to ensure dist artifacts are present..."
+                  pnpm run build
+                else
+                  echo "No build script found for $package_name, skipping build step."
+                fi
+              fi
+              
+              # Use --ignore-scripts to prevent malicious postinstall scripts
+              # Use --access public to ensure public access
+              # Cloud functions are published with aws tag and also get latest tag
+              if [[ "$package_name" == "@twick/cloud-"* ]]; then
+                if [ "$VERSION_EXISTS" = false ]; then
+                  echo "Running dry-run for $package_name with aws tag..."
+                  npm publish --access public --ignore-scripts --tag aws --dry-run
+                  echo "Publishing $package_name with aws tag..."
+                  npm publish --access public --ignore-scripts --tag aws
+                  echo "✓ Published $package_name@$VERSION with aws tag"
+                else
+                  echo "Updating dist-tags for existing version..."
+                fi
+                
+                # Always try to update latest tag (may already be set)
+                echo "Adding/updating latest dist-tag for $package_name..."
+                npm dist-tag add "$package_name@$VERSION" latest 2>/dev/null || {
+                  echo "ℹ️  Latest tag already set or couldn't update"
+                }
+                echo "✓ $package_name@$VERSION is available with tags: aws, latest"
+              else
+                if [ "$VERSION_EXISTS" = false ]; then
+                  echo "Running dry-run for $package_name..."
+                  npm publish --access public --ignore-scripts --dry-run
+                  echo "Publishing $package_name..."
+                  npm publish --access public --ignore-scripts
+                  echo "✓ Successfully published $package_name@$VERSION"
+                else
+                  echo "✓ $package_name@$VERSION already published, skipped"
+                fi
+              fi
+
+              cd - >/dev/null 2>&1
+            else
+              echo "Warning: Package $package not found or missing package.json"
+            fi
+          done
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Restore workspace dependencies
+        if: always()
+        run: |
+          # Restore workspace: prefixes in dependencies after publishing
+          echo "Restoring workspace dependencies..."
+          
+          # Check if the script exists
+          if [ ! -f "scripts/action-for-publish.js" ]; then
+            echo "Warning: scripts/action-for-publish.js not found, skipping restore"
+            exit 0
+          fi
+          
+          # Run the workspace dependency restore script
+          if ! node scripts/action-for-publish.js --restore; then
+            echo "Warning: Failed to restore workspace dependencies"
+            # Don't fail the workflow on restore failure
+          fi 

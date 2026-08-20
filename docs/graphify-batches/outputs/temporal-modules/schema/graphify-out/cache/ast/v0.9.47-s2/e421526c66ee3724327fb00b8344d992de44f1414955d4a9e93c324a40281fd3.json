@@ -1,0 +1,1 @@
+{"nodes": [{"id": "$graphify-root$_sqlite_version_go", "label": "version.go", "file_type": "code", "source_file": "sqlite/version.go", "source_location": "L1"}], "edges": [], "raw_calls": [], "go_imports": {}}

@@ -1,0 +1,153 @@
+# type: ignore
+
+import logging
+import types
+
+from pixeltable.utils.http import fetch_url, is_retryable_error, parse_duration_str, redact_url
+from pixeltable.utils.local_store import TempStore
+from pixeltable.utils.object_stores import ObjectOps
+
+
+class DummyError(Exception):
+    pass
+
+
+class TestHttpUtils:
+    def test_non_retriable_errors(self) -> None:
+        exc = DummyError('dummy')
+        assert not is_retryable_error(exc)[0]
+
+        exc.status = 400
+        assert not is_retryable_error(exc)[0]
+
+        exc = DummyError('dummy')
+        exc.status_code = 500
+        assert not is_retryable_error(exc)[0]
+
+        exc = DummyError('dummy')
+        exc.status_code = 'IM_A_TEAPOT'
+        assert not is_retryable_error(exc)[0]
+
+    def test_non_retriable_errors_inside_response(self) -> None:
+        exc = DummyError('dummy')
+        exc.response = types.SimpleNamespace()
+        assert not is_retryable_error(exc)[0]
+
+        exc.response.status = 404
+        assert not is_retryable_error(exc)[0]
+
+        exc = DummyError('dummy')
+        exc.response = types.SimpleNamespace()
+        exc.response.code = 'BAD_REQUEST'
+        assert not is_retryable_error(exc)[0]
+
+    def test_retriable_errors(self) -> None:
+        exc = DummyError('dummy')
+        exc.status = 429
+        assert is_retryable_error(exc) == (True, None)
+        exc.headers = {'Retry-After': '3'}
+        assert is_retryable_error(exc) == (True, 3)
+
+        exc = DummyError('dummy')
+        exc.code = 503
+        assert is_retryable_error(exc) == (True, None)
+        exc.headers = {'retryafter': '4', 'Some-Other-Header': 'value'}
+        assert is_retryable_error(exc) == (True, 4)
+
+        exc = DummyError('dummy')
+        exc.code = 'too_many_requests'
+        assert is_retryable_error(exc) == (True, None)
+
+    def test_retriable_errors_inside_response(self) -> None:
+        exc = DummyError('dummy')
+        exc.response = types.SimpleNamespace()
+        exc.response.status = 429
+        assert is_retryable_error(exc) == (True, None)
+        exc.response.headers = {'Retry-After': '3'}
+        assert is_retryable_error(exc) == (True, 3)
+
+    def test_retriable_errors_based_on_msg(self) -> None:
+        exc = DummyError('blah-blah-blah too many requests blah-blah-blah')
+        assert is_retryable_error(exc) == (True, None)
+
+        exc = DummyError('rate exceeded, retry after 123 seconds')
+        assert is_retryable_error(exc) == (True, 123)
+
+        exc = DummyError('（╯ ͡° ل͜ ͡°）╯︵ ┻━┻  request throttled, retry-after:7')  # noqa: RUF001
+        assert is_retryable_error(exc) == (True, 7)
+
+        exc = DummyError('429, try again in 5 seconds')
+        assert is_retryable_error(exc) == (True, 5)
+
+    def test_twelvelabs_exc(self) -> None:
+        # Almost the actual error received from TwelveLabs
+        exc = DummyError()
+        exc.status_code = 429
+        exc.args = ()
+        exc.body = {
+            'code': 'too_many_requests',
+            'message': 'You have exceeded the rate limit (100req/1day). '
+            'Please try again later after 2025-11-08T01:20:49Z.',
+        }
+        exc.headers = {
+            'date': 'Fri, 07 Nov 2025 22:11:07 GMT',
+            'content-type': 'application/json; charset=UTF-8',
+            'content-length': '149',
+            'connection': 'keep-alive',
+            'content-encoding': 'gzip',
+            'retry-after': '11382',
+            'tl-report': 'backend',
+            'vary': 'Accept-Encoding',
+            'x-ratelimit-limit': '100',
+            'x-ratelimit-remaining': '0',
+            'x-ratelimit-reset': '1762564849',
+            'x-ratelimit-used': '100',
+            'x-trace-id': '122506435189331138',
+        }
+        assert is_retryable_error(exc) == (True, 11382)
+
+    def test_parse_duration_header(self) -> None:
+        assert parse_duration_str(None) is None
+        assert parse_duration_str('') is None
+        assert parse_duration_str('invalid') is None
+        assert parse_duration_str('10x') is None
+
+        assert parse_duration_str('0s') == 0
+        assert parse_duration_str('0ms') == 0
+        assert parse_duration_str('6ms') == 0.006
+        assert parse_duration_str('857ms') == 0.857
+        assert parse_duration_str('10s') == 10
+        assert parse_duration_str('10.123s') == 10.123
+        assert parse_duration_str('10s123ms') == 10.123
+        assert parse_duration_str('1m') == 60
+        assert parse_duration_str('1m7s') == 67
+        assert parse_duration_str('1m33.792s') == 93.792
+        assert parse_duration_str('0m7s') == 7
+        assert parse_duration_str('1h') == 3600
+        assert parse_duration_str('1h10m3s') == 4203
+        assert parse_duration_str('156h58m48.601s') == 565128.601
+        assert parse_duration_str('1d') == 86400
+        assert parse_duration_str('1d2h3m4s') == 93784
+        assert parse_duration_str('47.874s') == 47.874
+
+    def test_redact_url(self) -> None:
+        secret_url = (
+            'https://user:password@example.com:8443/media/image.jpg?X-Amz-Credential=access-key'
+            '&X-Amz-Signature=signature#fragment'
+        )
+        assert redact_url(secret_url) == 'https://example.com:8443/media/image.jpg'
+        assert redact_url('https://example.com/media/image.jpg') == 'https://example.com/media/image.jpg'
+        assert redact_url('https://user:password@[invalid/media?signature') == '<redacted-url>'
+
+    def test_fetch_url_logs_redacted_url(self, caplog, monkeypatch, tmp_path) -> None:
+        secret_url = 'https://user:password@example.com/media.jpg?X-Amz-Signature=signature#fragment'
+        tmp_file = tmp_path / 'media.jpg'
+        monkeypatch.setattr(TempStore, 'create_path', lambda extension: tmp_file)
+        monkeypatch.setattr(ObjectOps, 'copy_object_to_local_file', lambda _url, path: path.touch())
+        monkeypatch.setattr(logging.getLogger('pixeltable'), 'propagate', True)
+
+        with caplog.at_level(logging.DEBUG, logger='pixeltable.utils.http'):
+            assert fetch_url(secret_url) == tmp_file
+
+        assert 'https://example.com/media.jpg' in caplog.text
+        assert all(secret not in caplog.text for secret in ('user', 'password', 'X-Amz-Signature', 'signature'))
