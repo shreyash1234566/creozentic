@@ -1,1 +1,0 @@
-{"nodes": [{"id": "$graphify-root$_third_party_temporal_common_config_template_coverage_test_go", "label": "template_coverage_test.go", "file_type": "code", "source_file": "third_party/temporal/common/config/template_coverage_test.go", "source_location": "L1"}], "edges": [], "raw_calls": [], "go_imports": {}}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import json
 import mimetypes
 from collections import defaultdict
@@ -9,8 +10,13 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 ROOT = Path(__file__).resolve().parent
 GRAPH_PATH = ROOT / 'graph.json'
-with GRAPH_PATH.open(encoding='utf-8') as f:
-    GRAPH = json.load(f)
+GRAPH_GZ_PATH = ROOT / 'graph.json.gz'
+if GRAPH_PATH.exists():
+    with GRAPH_PATH.open(encoding='utf-8') as f:
+        GRAPH = json.load(f)
+else:
+    with gzip.open(GRAPH_GZ_PATH, 'rt', encoding='utf-8') as f:
+        GRAPH = json.load(f)
 NODES = {str(n['id']): n for n in GRAPH.get('nodes', [])}
 OUT = defaultdict(list)
 IN = defaultdict(list)

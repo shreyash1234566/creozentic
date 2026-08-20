@@ -1,7 +1,0 @@
-fastapi
-pydantic
-pillow
-python-dotenv
-pixeltable
-anthropic
-uvicorn

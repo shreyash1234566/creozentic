@@ -1,1 +1,0 @@
-{"nodes": [{"id": "$graphify-root$_service_frontend_namespace_handler_mock_go", "label": "namespace_handler_mock.go", "file_type": "code", "source_file": "service/frontend/namespace_handler_mock.go", "source_location": "L1"}], "edges": [], "raw_calls": [], "go_imports": {}}

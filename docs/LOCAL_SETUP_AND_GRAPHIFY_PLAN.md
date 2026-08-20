@@ -134,7 +134,7 @@ Repeat the command for every successful batch. Then export the merged graph:
 graphify export callflow-html <output-location>
 ```
 
-Keep the raw merged graph in a large-file artifact location rather than ordinary Git if it exceeds GitHub’s normal file limit. The project’s generated report and manifest should remain in Git:
+Keep the raw merged graph in a large-file artifact location rather than ordinary Git if it exceeds GitHub’s normal file limit. The repository now also keeps a compressed `graph.json.gz` artifact and a small `graph-overview.json`, while the generated report and manifest remain in Git:
 
 ```text
 docs/graphify-final/GRAPH_REPORT.md
@@ -142,7 +142,7 @@ docs/graphify-final/batch-manifest.json
 docs/graphify-final/graph-visual.html
 ```
 
-The complete `graph.json` can be stored using Git LFS, a release asset, object storage, or regenerated locally/through CI.
+The complete uncompressed `graph.json` is ignored by Git and can be regenerated locally or stored with Git LFS/object storage if needed. The compressed `graph.json.gz` is the portable one-clone artifact. `graph_viewer_server.py` automatically loads the raw JSON when it exists locally and otherwise loads the compressed artifact after a fresh clone.
 
 ## 8. Open the visual knowledge graph
 

@@ -1,4 +1,0 @@
-pytest
-pillow
-numpy
-requests

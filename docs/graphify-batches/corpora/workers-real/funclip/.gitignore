@@ -1,5 +1,0 @@
-*.pyc
-**/.DS_Store
-ClipVideo/clipvideo/output
-**/__pycache__/
-*.spec

@@ -1,1 +1,0 @@
-{"nodes": [{"id": "$graphify-root$_testing_mocksdk_generate_go", "label": "generate.go", "file_type": "code", "source_file": "testing/mocksdk/generate.go", "source_location": "L1"}], "edges": [], "raw_calls": [], "go_imports": {}}

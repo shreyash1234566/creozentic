@@ -1,1 +1,0 @@
-{"nodes": [{"id": "$graphify-root$_testing_nettest_package_go", "label": "package.go", "file_type": "code", "source_file": "testing/nettest/package.go", "source_location": "L1"}], "edges": [], "raw_calls": [], "go_imports": {}}

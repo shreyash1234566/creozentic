@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "imgly_docs": {
-      "type": "http",
-      "url": "https://docs.tool.imgly.dev"
-    }
-  }
-}

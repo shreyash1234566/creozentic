@@ -1,1 +1,0 @@
-{"nodes": [{"id": "$graphify-root$_prisma_migrations_20260813150616_batch_controls_migration_sql", "label": "migration.sql", "file_type": "code", "source_file": "prisma/migrations/20260813150616_batch_controls/migration.sql", "source_location": null}], "edges": []}
