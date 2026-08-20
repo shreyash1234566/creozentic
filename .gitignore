@@ -39,3 +39,8 @@ third_party/*/.source-first-output*
 /third_party/**/*.mkv
 /third_party/**/*.mov
 /third_party/**/*.webm
+
+# Python bytecode caches
+**/__pycache__/
+*.pyc
+*.pyo
