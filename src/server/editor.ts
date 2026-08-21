@@ -25,6 +25,15 @@ function json(value: unknown) {
   return value as Prisma.InputJsonValue;
 }
 
+function srtTime(seconds: number) {
+  const safe = Math.max(0, seconds);
+  const hours = Math.floor(safe / 3600);
+  const minutes = Math.floor((safe % 3600) / 60);
+  const whole = Math.floor(safe % 60);
+  const millis = Math.floor((safe - Math.floor(safe)) * 1000);
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(whole).padStart(2, "0")},${String(millis).padStart(3, "0")}`;
+}
+
 function nonEmpty(value: unknown, fallback: string) {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
 }
@@ -52,9 +61,18 @@ function planInput(project: {
   }>;
 }) {
   const evidenceIds = project.evidence.map((item) => item.id);
+  const sourceDuration = Math.max(
+    1,
+    ...project.evidence.map((item) => (item.endSec && item.endSec > 0 ? item.endSec : 0)),
+  );
+  const clampWindow = (start: number, end: number) => {
+    const safeStart = Math.min(Math.max(0, start), Math.max(0, sourceDuration - 0.1));
+    const safeEnd = Math.min(sourceDuration, Math.max(safeStart + 0.1, end));
+    return { startSec: safeStart, endSec: safeEnd };
+  };
   const firstEvidence =
     project.evidence.find((item) => item.startSec !== null) ?? project.evidence[0];
-  const beats = [
+  const rawBeats = [
     {
       sequence: 1,
       startSec: 0,
@@ -106,6 +124,7 @@ function planInput(project: {
       transition: "cut",
     },
   ];
+  const beats = rawBeats.map((beat) => ({ ...beat, ...clampWindow(beat.startSec, beat.endSec) }));
   const runtimeEvidence = project.evidence.map((item) => ({
     id: item.id,
     startSec: item.startSec ?? undefined,
@@ -137,8 +156,7 @@ function planInput(project: {
         mediaType: stillDecision.mediaType,
         decisionReason: stillDecision.reason,
         decisionRisk: stillDecision.estimatedRisk,
-        startSec: 0,
-        endSec: 3,
+        ...clampWindow(0, 3),
         keyframes: [
           { t: 0, scale: 1 },
           { t: 1, scale: 1.04 },
@@ -159,8 +177,7 @@ function planInput(project: {
         decisionReason: metaphorDecision.reason,
         decisionRisk: metaphorDecision.estimatedRisk,
         bounded: true,
-        startSec: 3,
-        endSec: 7,
+        ...clampWindow(3, 7),
       },
       factuality: "NON_FACTUAL_METAPHOR",
       approvalState: "PENDING",
@@ -425,7 +442,15 @@ export async function getEditorProject(context: RequestContext, projectId: strin
   const project = await db.editorProject.findFirst({
     where: { id: projectId, workspaceId: context.workspaceId },
     include: {
-      evidence: true,
+      evidence: {
+        include: {
+          words: true,
+          shots: true,
+          audioWindows: true,
+          entities: true,
+          ocrRegions: true,
+        },
+      },
       plans: {
         orderBy: { version: "desc" },
         include: {
@@ -949,10 +974,25 @@ export async function mutateEditorProject(
           endSec: Number(recipe.endSec ?? 3),
         });
       }
+      const extractedEvidence = project.evidence.find((item) => item.kind === "EXTRACTED_MEDIA");
+      const verifiedDuration = extractedEvidence?.endSec && extractedEvidence.endSec > 0
+        ? extractedEvidence.endSec
+        : undefined;
+      const timedWords = extractedEvidence?.words ?? [];
+      const captionPath = timedWords.length ? join(work, "captions.srt") : undefined;
+      if (captionPath) {
+        const captionText = timedWords
+          .filter((word) => Number.isFinite(word.startSec) && Number.isFinite(word.endSec) && word.endSec > word.startSec)
+          .map((word, index) => `${index + 1}\\n${srtTime(word.startSec)} --> ${srtTime(word.endSec)}\\n${word.word}\\n`)
+          .join("\\n");
+        await writeFile(captionPath, captionText, "utf8");
+      }
       await renderEditorVideo({
         sourcePath,
         outputPath,
-        durationSec: Number(input.durationSec ?? 0) || undefined,
+        durationSec: verifiedDuration,
+        preserveSourceDuration: true,
+        captionPath,
         visualInserts: renderVisuals,
       });
       let outputAssetId: string | undefined;

@@ -32,7 +32,7 @@ Updated after the first remediation pass. “Fixed” means the repository code 
 | H-06 | Worker commands are not reliable contracts | **Partial** | OpenShorts now uses `OPENSHORTS_PYTHON`/`CREOZENTIC_PYTHON` and works with clean clones. Notebook/apps/services still need dedicated adapters, health checks, and output schemas. |
 | H-07 | Default plan lacks a still-image candidate | **Fixed in code** | The default plan now creates a prompted still-image candidate with no pre-existing asset, so the image branch is exercised. |
 | H-08 | Prompted insert without asset is silently ignored | **Fixed in code** | Render now rejects any prompted insert without an asset and requires generation or explicit removal. |
-| H-09 | Renderer ignores cuts/captions/audio/motion/platform outputs | **Pending** | Current FFmpeg path still performs source scaling and image/video overlays only. A real composition/render implementation and golden media tests remain required. |
+| H-09 | Renderer ignores cuts/captions/audio/motion/platform outputs | **Partial** | FFmpeg now renders SRT captions, accepts optional music mixing, preserves source-master duration, clamps insert windows, and supports image/video inserts. Semantic cuts, motion graphics, and platform variants remain. |
 | H-10 | Project remains `RENDERING` after render | **Reclassified / intentional** | The state machine uses `RENDERING` as the state before the required `EVALUATE` event. The render row becomes `COMPLETED`; the project transitions to evaluation through the existing lifecycle. Add an explicit `AWAITING_EVALUATION` state only if the UI needs that distinction. |
 | H-11 | OpenShorts assumes removed `.venv` | **Fixed in code** | Launcher now uses `OPENSHORTS_PYTHON`, `CREOZENTIC_PYTHON`, `PYTHON`, or platform Python. A fresh-clone worker smoke test is still required on the user’s Windows/Conda machine. |
 | H-12 | Long operations are synchronous | **Pending** | Generation, worker execution, and rendering still await inside request handlers. Durable queued jobs with progress, retry, cancellation, and persisted stage state remain required. |
@@ -41,13 +41,13 @@ Updated after the first remediation pass. “Fixed” means the repository code 
 
 | ID | Finding | Status | Evidence / remaining action |
 |---|---|---|---|
-| M-01 | Hardcoded plan timing | **Pending** | Plan timing must derive from verified duration/transcript and clamp every range. |
-| M-02 | Caller duration can control render | **Pending** | Render should use verified evidence duration and a validated render manifest. |
-| M-03 | Global `-shortest` may truncate output | **Pending** | Add explicit source-master timeline behavior and a short-video-insert fixture. |
-| M-04 | Audio plan is metadata only | **Pending** | Music, ducking, voice, and loudness mix are not yet passed to FFmpeg/original composition worker. |
-| M-05 | Captions/motion graphics are metadata only | **Pending** | Caption and motion-graphics render stages are still required. |
+| M-01 | Hardcoded plan timing | **Partial** | Default beat and B-roll windows now clamp to verified source duration. A real Director/EDL planner is still needed to derive semantic timing from transcript words rather than fixed fallback beats. |
+| M-02 | Caller duration can control render | **Fixed in code** | Render now derives duration from persisted extracted evidence and ignores caller duration for the normal editor path. |
+| M-03 | Global `-shortest` may truncate output | **Fixed in code / fixture pending** | `-shortest` is no longer used by default; source duration is the master timeline. A short-insert media fixture remains to be added. |
+| M-04 | Audio plan is metadata only | **Partial** | FFmpeg now accepts a music path and bounded volume mix. The editor still needs a real rights-cleared music asset resolver and loudness QA. |
+| M-05 | Captions/motion graphics are metadata only | **Partial** | Persisted timed words are converted to SRT and passed to FFmpeg. Motion-graphics rendering remains pending. |
 | M-06 | QA uses hardcoded claims | **Pending** | QA must inspect actual output probes, loudness, caption geometry, transcript alignment, rights, and platform dimensions. |
-| M-07 | Render provenance incomplete | **Pending** | Persist source hashes, prompt hashes, provider requests, model versions, worker commits, and renderer command. |
+| M-07 | Render provenance incomplete | **Partial** | Source/visual asset hashes and renderer version are persisted. Prompt hashes, provider request IDs, worker commits, and exact renderer command still need persistence. |
 | M-08 | Approval role/transition policy | **Partial** | Workspace/project scoping is fixed. Product decision is still required on whether visual approval requires `EDITOR` or `REVIEWER`; add authorization integration tests. |
 | M-09 | Registry status is not health status | **Pending** | Add dependency, model, entrypoint, and produced-artifact health fields. |
 | M-10 | Static Graphify edges can be mistaken for runtime edges | **Pending** | Viewer/report should distinguish static edge type, confidence, and runtime health evidence. |
@@ -76,12 +76,12 @@ Updated after the first remediation pass. “Fixed” means the repository code 
 | Still B-roll | **Branch and approval wiring fixed; image provider/checkpoint pending** |
 | Moving B-roll | **Branch and still fallback fixed; video provider/model pending** |
 | Approval and tenant scope | **Scope fixed; role policy integration test pending** |
-| Captions | **Planning metadata exists; render implementation pending** |
-| Audio mix/music ducking | **Planning metadata exists; render implementation pending** |
+| Captions | **SRT render path implemented; visual golden test pending** |
+| Audio mix/music ducking | **Bounded music-mix path implemented; rights/loudness integration pending** |
 | Final QA | **Deterministic contract only; real output inspection pending** |
 | Graphify architecture map | **Complete static artifact; runtime evidence distinction pending** |
 | Durable job execution | **Pending** |
 
 ## Overall result
 
-The first remediation pass fixed the highest-confidence security and contract defects and raised the test suite to **32 passing tests**. The remaining items are not all solvable by editing TypeScript alone: real transcription, image generation, video generation, diarization, OCR, and high-quality composition require original worker environments, exact model weights or providers, credentials, and runtime fixtures. The matrix intentionally keeps those items visible as external or pending instead of falsely marking them complete.
+The second remediation pass added evidence-derived caption generation, verified-duration rendering, source-master timeline behavior, and a bounded music-mix contract. The suite remains at **32 passing tests** with TypeScript, guide, and OSS checks passing. The remaining items are not all solvable by editing TypeScript alone: real transcription, image generation, video generation, diarization, OCR, and high-quality composition require original worker environments, exact model weights or providers, credentials, and runtime fixtures. The matrix intentionally keeps those items visible as external or pending instead of falsely marking them complete.

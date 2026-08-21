@@ -22,11 +22,18 @@ export type RenderInput = {
   width?: number;
   height?: number;
   visualInserts?: RenderVisualInsert[];
+  captionPath?: string;
+  musicPath?: string;
+  musicVolume?: number;
+  preserveSourceDuration?: boolean;
 };
 
 export async function renderEditorVideo(input: RenderInput) {
   await access(input.sourcePath);
+  if (input.captionPath) await access(input.captionPath);
+  if (input.musicPath) await access(input.musicPath);
   if (!input.outputPath || input.outputPath.includes("..")) throw new Error("Invalid output path.");
+  const escapeFilterPath = (value: string) => value.replace(/\\/g, "\\\\").replace(/:/g, "\\:").replace(/'/g, "\\'");
   const width = input.width ?? 1080;
   const height = input.height ?? 1920;
   const inserts = (input.visualInserts ?? []).filter(
@@ -41,7 +48,9 @@ export async function renderEditorVideo(input: RenderInput) {
     if (insert.imagePath) args.push("-loop", "1", "-i", insert.imagePath);
     else args.push("-i", insert.videoPath!);
   }
-  args.push("-map", "0:a:0?");
+  if (input.musicPath) args.push("-stream_loop", "-1", "-i", input.musicPath);
+  const audioInputIndex = 1 + inserts.length;
+  args.push("-map", input.musicPath ? "[aout]" : "0:a:0?");
   if (inserts.length) {
     const filters = [
       `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2[base]`,
@@ -58,19 +67,22 @@ export async function renderEditorVideo(input: RenderInput) {
           ? `[${index + 1}:v]${scale}[${mediaLabel}]`
           : `[${index + 1}:v]setpts=PTS-STARTPTS,${scale}[${mediaLabel}]`,
       );
-      filters.push(
+        filters.push(
         `[${current}][${mediaLabel}]overlay=${x}:${y}:enable='between(t,${Math.max(0, insert.startSec)},${Math.max(insert.startSec, insert.endSec)})'[${next}]`,
       );
       current = next;
     });
+    if (input.captionPath) filters.push(`[${current}]subtitles='${escapeFilterPath(input.captionPath)}'[captioned]`), current = "captioned";
+    if (input.musicPath) filters.push(`[${audioInputIndex}:a]volume=${Math.max(0, Math.min(input.musicVolume ?? 0.18, 1))}[music]`, `[0:a:0][music]amix=inputs=2:duration=first:dropout_transition=2[aout]`);
     args.push("-filter_complex", `${filters.join(";")};[${current}]null[vout]`, "-map", "[vout]");
   } else {
-    args.push(
-      "-vf",
-      `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2`,
-      "-map",
-      "0:v:0?",
-    );
+    const videoFilters = [`scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2`];
+    if (input.captionPath) videoFilters.push(`subtitles='${escapeFilterPath(input.captionPath)}'`);
+    const audioFilters = input.musicPath
+      ? `;[${audioInputIndex}:a]volume=${Math.max(0, Math.min(input.musicVolume ?? 0.18, 1))}[music];[0:a:0][music]amix=inputs=2:duration=first:dropout_transition=2[aout]`
+      : "";
+    if (input.musicPath) args.push("-filter_complex", `[0:v:0]${videoFilters.join(",")}[vout]${audioFilters}`, "-map", "[vout]");
+    else args.push("-vf", videoFilters.join(","), "-map", "0:v:0?");
   }
   args.push(
     "-c:v",
@@ -81,7 +93,7 @@ export async function renderEditorVideo(input: RenderInput) {
     "yuv420p",
     "-c:a",
     "aac",
-    "-shortest",
+    ...(input.preserveSourceDuration === false ? ["-shortest"] : []),
     "-movflags",
     "+faststart",
   );
@@ -93,7 +105,7 @@ export async function renderEditorVideo(input: RenderInput) {
   });
   return {
     outputPath: input.outputPath,
-    rendererVersion: "ffmpeg-editor-v2-image-video-inserts",
+    rendererVersion: "ffmpeg-editor-v3-captions-audio-source-master",
     stderr: result.stderr,
   };
 }
