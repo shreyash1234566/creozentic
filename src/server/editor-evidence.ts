@@ -102,9 +102,19 @@ function normalizeOcr(value: unknown): EvidenceBundle["ocrRegions"] {
   });
 }
 
+export class MediaEvidenceExtractionError extends Error {
+  constructor(
+    message: string,
+    readonly details: { stage: string; retryable: boolean; stderr?: string } = { stage: "media-evidence", retryable: true },
+  ) {
+    super(message);
+  }
+}
+
 export async function extractMediaEvidence(input: {
   assetPath: string;
   language?: string;
+  requireTranscript?: boolean;
 }): Promise<EvidenceBundle> {
   const workerPath = process.env.MEDIA_ANALYSIS_WORKER_PATH ?? "apps/worker/media_analysis.py";
   let workerPayload: Record<string, unknown> = {};
@@ -115,18 +125,31 @@ export async function extractMediaEvidence(input: {
       { timeout: Number(process.env.MEDIA_ANALYSIS_TIMEOUT_MS ?? 120_000) },
     );
     workerPayload = record(JSON.parse(stdout));
-  } catch {
-    workerPayload = {};
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "Unknown media worker failure.";
+    throw new MediaEvidenceExtractionError(`Media analysis worker failed: ${detail}`, {
+      stage: "media-analysis-worker",
+      retryable: true,
+      stderr: detail,
+    });
   }
   const media = record(workerPayload.media);
   const durationSec = numberValue(workerPayload.durationSec ?? media.durationSec) ?? 0;
   const streams = list(workerPayload.streams ?? media.streams).map((item) => record(item));
   const localTranscript = normalizeWords(workerPayload.transcript);
-  const speech = localTranscript.length ? undefined : configuredGateway("deepgram");
+  const isRemoteAsset = /^https?:\/\//i.test(input.assetPath);
+  const speech = localTranscript.length || !isRemoteAsset ? undefined : configuredGateway("deepgram");
   const transcriptResult = speech
     ? await speech.transcribe({ assetUrl: input.assetPath, language: input.language, diarize: true })
     : undefined;
   const transcript = transcriptResult?.transcript ?? workerPayload.transcript;
+  const transcriptWords = normalizeWords(transcript);
+  if (input.requireTranscript !== false && transcriptWords.length === 0) {
+    throw new MediaEvidenceExtractionError(
+      "No timed transcript was produced. Configure an original speech worker or provide an authorized remote transcription asset.",
+      { stage: "transcription", retryable: false },
+    );
+  }
   const extractorVersions = record(workerPayload.extractor_versions);
   const sourceChecksum = createHash("sha256")
     .update(JSON.stringify({ media, streams, transcript, extractorVersions }))
@@ -141,7 +164,7 @@ export async function extractMediaEvidence(input: {
       sampleRate: numberValue(stream.sample_rate ?? stream.sampleRate),
     })),
     transcript,
-    transcriptWords: normalizeWords(transcript),
+    transcriptWords,
     shots: normalizeShots(workerPayload.shot_boundaries),
     audioWindows: normalizeAudioWindows(workerPayload.audio_windows),
     entities: normalizeEntities(workerPayload.detected_entities),

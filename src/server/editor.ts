@@ -15,6 +15,7 @@ import { buildEditDecisionList, buildOtioTimeline, createRenderManifest } from "
 import { decideBrollMedia } from "./broll-decision";
 import { getOpenSourceEditingPlan, runOriginalEditingWorker } from "./open-source-editing";
 import { executeCreativeRequest } from "./gateway";
+import { assertTrustedMediaPath, assertTrustedOutputPath } from "./editor-paths";
 import { isWorkspaceObjectKey, readObject, verifyUploadedObject, writeObject } from "./storage";
 
 const ISSUE_CODES = editorIssueCodes;
@@ -129,8 +130,8 @@ function planInput(project: {
     {
       beatId: null,
       sourceStrategy: "verified-source-first",
-      assetSource: firstEvidence?.id ?? null,
-      prompt: null,
+      assetSource: null,
+      prompt: `A restrained still visual supporting ${project.objective} without adding unsupported factual claims`,
       motionRecipe: {
         type: "subtle-pan",
         mediaType: stillDecision.mediaType,
@@ -209,7 +210,7 @@ function planInput(project: {
       "audioPlan",
       "captionPlan",
     ],
-    modelVersions: { planner: "deterministic-v2" },
+    modelVersions: { planner: "deterministic-fallback-v2" },
     promptVersions: {
       director: promptVersion("editor_narrative_planner"),
       contract: directorContract,
@@ -465,17 +466,22 @@ export async function analyzeEditorProject(
   const assetIds = Array.isArray(input.assetIds)
     ? input.assetIds.filter((id): id is string => typeof id === "string")
     : [];
-  const assetPath = typeof input.assetPath === "string" ? input.assetPath : null;
+  const requestedAssetPath = typeof input.assetPath === "string" ? input.assetPath : null;
+  const assetPath = requestedAssetPath
+    ? await assertTrustedMediaPath(requestedAssetPath, "assetPath", { mustExist: true })
+    : null;
   const extracted = assetPath
     ? await extractMediaEvidence({
         assetPath,
         language: typeof input.language === "string" ? input.language : undefined,
+        requireTranscript: input.metadataOnly !== true,
       })
     : null;
   transitionOrThrow(project.state, "ANALYZE");
   const evidence = await db.$transaction(async (tx) => {
     await tx.editorProject.update({ where: { id: project.id }, data: { state: "ANALYZING" } });
-    if (!assetIds.length && !extracted) return [];
+    if (!assetIds.length && !extracted)
+      throw new ApiError(409, "EDITOR_EVIDENCE_REQUIRED", "A verified source asset or extracted media evidence is required.");
     await tx.mediaEvidence.deleteMany({ where: { projectId: project.id } });
     for (const assetId of assetIds) {
       await tx.mediaEvidence.create({
@@ -807,11 +813,23 @@ export async function mutateEditorProject(
   }
   if (action === "visual-inserts/approve") {
     const visualInsertId = nonEmpty(input.visualInsertId, "");
+    const visualInsert = await db.visualInsert.findFirst({
+      where: {
+        id: visualInsertId,
+        plan: {
+          projectId,
+          project: { workspaceId: context.workspaceId },
+        },
+      },
+      select: { id: true },
+    });
+    if (!visualInsert)
+      throw new ApiError(404, "VISUAL_INSERT_NOT_FOUND", "The visual insert is not part of this workspace project.");
     await db.visualInsert.update({
-      where: { id: visualInsertId },
+      where: { id: visualInsert.id },
       data: { approvalState: "APPROVED" },
     });
-    return { approved: true, visualInsertId };
+    return { approved: true, visualInsertId: visualInsert.id };
   }
   if (action === "render") {
     transitionOrThrow(project.state, "RENDER");
@@ -829,8 +847,12 @@ export async function mutateEditorProject(
         status: "QUEUED",
       },
     });
-    const requestedSourcePath = typeof input.sourcePath === "string" ? input.sourcePath : null;
-    const requestedOutputPath = typeof input.outputPath === "string" ? input.outputPath : null;
+    const requestedSourcePath = typeof input.sourcePath === "string"
+      ? await assertTrustedMediaPath(input.sourcePath, "sourcePath", { mustExist: true })
+      : null;
+    const requestedOutputPath = typeof input.outputPath === "string"
+      ? assertTrustedOutputPath(input.outputPath)
+      : null;
     const sourceAssetId = nonEmpty(input.sourceAssetId, "");
     const sourceAsset = sourceAssetId
       ? await db.asset.findFirst({
@@ -875,6 +897,14 @@ export async function mutateEditorProject(
       const generatedInserts = (plan?.visualInserts ?? []).filter(
         (insert) => typeof insert.prompt === "string" && insert.prompt.trim().length > 0,
       );
+      const incomplete = generatedInserts.filter((insert) => !insert.assetSource);
+      if (incomplete.length)
+        throw new ApiError(
+          409,
+          "VISUAL_ASSET_REQUIRED",
+          "Generate or explicitly remove every prompted visual insert before rendering.",
+          { visualInsertIds: incomplete.map((insert) => insert.id) },
+        );
       const pending = generatedInserts.filter(
         (insert) => insert.assetSource && insert.approvalState !== "APPROVED",
       );

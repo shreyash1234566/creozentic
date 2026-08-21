@@ -169,8 +169,10 @@ export const OPEN_SOURCE_EDITING_REFERENCES: readonly OpenSourceEditingReference
 
 export type OriginalWorkerId = OpenSourceEditingReference["id"];
 
+const pythonCommand = process.env.CREOZENTIC_PYTHON ?? process.env.PYTHON ?? (process.platform === "win32" ? "python" : "python3");
+
 const ORIGINAL_ENTRYPOINTS: Record<OriginalWorkerId, { command: string; args: string[] }> = {
-  openshorts: { command: "./.venv/bin/python", args: ["main.py"] },
+  openshorts: { command: process.env.OPENSHORTS_PYTHON ?? pythonCommand, args: ["main.py"] },
   cutscript: { command: "python3", args: ["backend/main.py"] },
   videoclipper: { command: "pnpm", args: ["dev"] },
   "ai-broll": { command: "python3", args: ["-m", "jupyter", "nbconvert", "--to", "notebook", "AI_Broll.ipynb"] },

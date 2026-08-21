@@ -154,15 +154,21 @@ function isCreativeResult(value: unknown): value is CreativeResult {
   const usage = result.usage;
   const outputsValid =
     Array.isArray(result.outputs) &&
+    result.outputs.length > 0 &&
     result.outputs.every((output) => {
       if (!output || typeof output !== "object") return false;
       const item = output as Record<string, unknown>;
-      return typeof item.assetId === "string" && typeof item.mimeType === "string";
+      return (
+        typeof item.assetId === "string" && item.assetId.length > 0 &&
+        typeof item.mimeType === "string" && item.mimeType.length > 0 &&
+        typeof item.objectKey === "string" && item.objectKey.length > 0 &&
+        typeof item.contentHash === "string" && item.contentHash.length > 0
+      );
     });
   return (
-    typeof result.provider === "string" &&
-    typeof result.model === "string" &&
-    typeof result.modelVersion === "string" &&
+    typeof result.provider === "string" && result.provider.length > 0 &&
+    typeof result.model === "string" && result.model.length > 0 &&
+    typeof result.modelVersion === "string" && result.modelVersion.length > 0 &&
     outputsValid &&
     !!usage &&
     typeof usage === "object" &&

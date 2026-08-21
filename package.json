@@ -17,7 +17,7 @@
     "test:e2e": "playwright test",
     "test:integration": "tsx --test tests/integration/**/*.test.ts",
     "test:load": "node tests/load/health-load.mjs",
-    "test:unit": "tsx --test tests/core-contracts.test.ts tests/editor-contracts.test.ts tests/guide-complete-contracts.test.ts tests/adopted-engines.test.ts tests/media-evidence.test.ts tests/package-boundaries.test.ts tests/part2-runtime.test.ts",
+    "test:unit": "tsx --test tests/core-contracts.test.ts tests/editor-contracts.test.ts tests/guide-complete-contracts.test.ts tests/adopted-engines.test.ts tests/media-evidence.test.ts tests/package-boundaries.test.ts tests/part2-runtime.test.ts tests/security-boundaries.test.ts",
     "test": "pnpm test:unit && pnpm test:production-smoke",
     "format": "oxfmt",
     "guide:check": "tsx scripts/guide-completeness.ts",
