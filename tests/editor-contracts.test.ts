@@ -28,7 +28,7 @@ test("all guide editor prompt families are versioned", () => {
 });
 
 test("quality judges expose the complete issue taxonomy and reject unsafe evidence", () => {
-  assert.equal(editorIssueCodes.length, 19);
+  assert.equal(editorIssueCodes.length, 20);
   const result = runSpecializedJudges({
     hasHook: false,
     hasVerifiedEvidence: false,
@@ -45,4 +45,19 @@ test("quality judges expose the complete issue taxonomy and reject unsafe eviden
   assert.equal(result.verdict, "REJECT");
   assert.ok(result.issues.some((item) => item.issueCode === "PRODUCT_FACT_RISK"));
   assert.ok(result.issues.some((item) => item.issueCode === "CAPTION_OUT_OF_SAFE_ZONE"));
+  const unverified = runSpecializedJudges({
+    hasHook: true,
+    hasVerifiedEvidence: true,
+    hasCaptionPlan: true,
+    captionsInsideSafeZone: null,
+    audioClipping: null,
+    transcriptMatches: null,
+    rightsApproved: true,
+    platformValid: true,
+    brandAligned: true,
+    motionIntensity: "BALANCED",
+    repeatedVisualCount: 0,
+  });
+  assert.equal(unverified.verdict, "REVIEW");
+  assert.equal(unverified.issues.filter((issue) => issue.issueCode === "QA_NOT_VERIFIED").length, 3);
 });

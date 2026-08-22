@@ -1053,16 +1053,18 @@ export async function mutateEditorProject(
     const render = project.renders.find((item) => item.id === renderId) ?? project.renders[0];
     if (!render)
       throw new ApiError(409, "RENDER_REQUIRED", "Render before running quality judges.");
+    const visualInserts = Array.isArray(project.plans[0]?.visualInserts) ? project.plans[0]?.visualInserts : [];
+    const allVisualsApproved = visualInserts.every((insert) => !insert.assetSource || insert.approvalState === "APPROVED");
     const result = runSpecializedJudges({
       hasHook: Boolean(project.plans[0]?.hooks.some((hook) => hook.locked)),
       hasVerifiedEvidence: project.evidence.some((item) => item.confidence === 1),
       hasCaptionPlan: Boolean(project.plans[0]?.captionPlan),
-      captionsInsideSafeZone: true,
-      audioClipping: false,
-      transcriptMatches: true,
-      rightsApproved: true,
-      platformValid: true,
-      brandAligned: true,
+      captionsInsideSafeZone: null,
+      audioClipping: null,
+      transcriptMatches: null,
+      rightsApproved: allVisualsApproved,
+      platformValid: Boolean(project.platform),
+      brandAligned: Boolean(project.memorySnapshot ?? project.plans[0]?.visualBible),
       motionIntensity: "BALANCED",
       repeatedVisualCount: 0,
     });

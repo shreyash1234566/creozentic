@@ -14,9 +14,9 @@ export type JudgeInput = {
   hasHook: boolean;
   hasVerifiedEvidence: boolean;
   hasCaptionPlan: boolean;
-  captionsInsideSafeZone: boolean;
-  audioClipping: boolean;
-  transcriptMatches: boolean;
+  captionsInsideSafeZone: boolean | null;
+  audioClipping: boolean | null;
+  transcriptMatches: boolean | null;
   rightsApproved: boolean;
   platformValid: boolean;
   brandAligned: boolean;
@@ -62,7 +62,9 @@ export function runSpecializedJudges(input: JudgeInput) {
         "Create a caption plan with platform safe zones.",
       ),
     );
-  if (!input.captionsInsideSafeZone)
+  if (input.captionsInsideSafeZone === null)
+    issues.push(issue("QA_NOT_VERIFIED", "HIGH", "Caption geometry was not measured from the rendered output.", "Run the rendered-caption geometry probe before approving."));
+  else if (!input.captionsInsideSafeZone)
     issues.push(
       issue(
         "CAPTION_OUT_OF_SAFE_ZONE",
@@ -71,7 +73,9 @@ export function runSpecializedJudges(input: JudgeInput) {
         "Move captions inside the approved safe area.",
       ),
     );
-  if (input.audioClipping)
+  if (input.audioClipping === null)
+    issues.push(issue("QA_NOT_VERIFIED", "HIGH", "Audio peak/loudness was not measured from the rendered output.", "Run the audio probe before approving."));
+  else if (input.audioClipping)
     issues.push(
       issue(
         "AUDIO_CLIPPING",
@@ -80,7 +84,9 @@ export function runSpecializedJudges(input: JudgeInput) {
         "Lower peak gain and rerun the audio judge.",
       ),
     );
-  if (!input.transcriptMatches)
+  if (input.transcriptMatches === null)
+    issues.push(issue("QA_NOT_VERIFIED", "HIGH", "Transcript-to-render alignment was not measured.", "Run the transcript alignment probe before approving."));
+  else if (!input.transcriptMatches)
     issues.push(
       issue(
         "TRANSCRIPT_MISMATCH",

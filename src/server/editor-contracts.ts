@@ -93,6 +93,7 @@ export const editorIssueCodes = [
   "BRAND_STYLE_MISMATCH",
   "RIGHTS_ERROR",
   "PLATFORM_SPEC_ERROR",
+  "QA_NOT_VERIFIED",
 ] as const;
 
 export const editorIssueSchema = z.object({
